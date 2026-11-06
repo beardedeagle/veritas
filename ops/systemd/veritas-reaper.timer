@@ -1,0 +1,11 @@
+# The reaper's timer: every five minutes.
+[Unit]
+Description=Run the Veritas process reaper every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=veritas-reaper.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,363 @@
+/* See the Tailwind configuration guide for advanced usage
+   https://tailwindcss.com/docs/configuration */
+
+@import "tailwindcss" source(none);
+@import "phoenix-colocated/veritas_web/colocated.css";
+@source "../css";
+@source "../js";
+@source "../../lib/veritas_web";
+/* Required for Tailwind to automatically pick up changes in colocated CSS files in dev */
+@source "../../../../_build/dev/phoenix-colocated/veritas_web/*/";
+
+/* A Tailwind plugin that makes "hero-#{ICON}" classes available.
+   The heroicons installation itself is managed by your mix.exs */
+@plugin "../vendor/heroicons";
+
+/* daisyUI Tailwind Plugin. */
+@plugin "daisyui/packages/bundle/daisyui" {
+  themes: false;
+}
+
+/* ── The Veritas theme ───────────────────────────────────────────────────────
+ *
+ * The palette is the brand's: a violet "V" over a teal stroke. The dark
+ * theme is the default — the product is meant to be read at 2am without
+ * glowing, and the operator is the persona who lives in it.
+ *
+ * Every foreground/background pair below was chosen against the surface it
+ * sits on and clears WCAG AA (4.5:1 for text, 3:1 for large text and for
+ * non-text UI boundaries). Contrast is a release gate, not a nicety.
+ */
+@plugin "daisyui/packages/bundle/daisyui-theme" {
+  name: "dark";
+  default: true;
+  prefersdark: true;
+  color-scheme: "dark";
+  --color-base-100: #0b0e14;
+  --color-base-200: #12161f;
+  --color-base-300: #1a1f2b;
+  --color-base-content: #e6e9ef;
+  --color-primary: #8b6fff;
+  --color-primary-content: #0b0e14;
+  --color-secondary: #50d5c5;
+  --color-secondary-content: #0b0e14;
+  --color-accent: #50d5c5;
+  --color-accent-content: #0b0e14;
+  --color-neutral: #1a1f2b;
+  --color-neutral-content: #e6e9ef;
+  --color-info: #58a6ff;
+  --color-info-content: #0b0e14;
+  --color-success: #3fb950;
+  --color-success-content: #0b0e14;
+  --color-warning: #d29922;
+  --color-warning-content: #0b0e14;
+  --color-error: #f0616d;
+  --color-error-content: #0b0e14;
+  --radius-selector: 0.25rem;
+  --radius-field: 0.25rem;
+  --radius-box: 0.375rem;
+  --size-selector: 0.21875rem;
+  --size-field: 0.21875rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@plugin "daisyui/packages/bundle/daisyui-theme" {
+  name: "light";
+  default: false;
+  prefersdark: false;
+  color-scheme: "light";
+  --color-base-100: #ffffff;
+  --color-base-200: #f6f7f9;
+  --color-base-300: #e4e7ec;
+  --color-base-content: #101828;
+  --color-primary: #5b3df5;
+  --color-primary-content: #ffffff;
+  --color-secondary: #007f78;
+  --color-secondary-content: #ffffff;
+  --color-accent: #007f78;
+  --color-accent-content: #ffffff;
+  --color-neutral: #344054;
+  --color-neutral-content: #ffffff;
+  --color-info: #175cd3;
+  --color-info-content: #ffffff;
+  --color-success: #067647;
+  --color-success-content: #ffffff;
+  --color-warning: #b54708;
+  --color-warning-content: #ffffff;
+  --color-error: #b42318;
+  --color-error-content: #ffffff;
+  --radius-selector: 0.25rem;
+  --radius-field: 0.25rem;
+  --radius-box: 0.375rem;
+  --size-selector: 0.21875rem;
+  --size-field: 0.21875rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/* ── Semantic tokens ────────────────────────────────────────────────────────
+ *
+ * Severity, workflow state and CI health each get their own channel, and the
+ * channels never overlap:
+ *
+ *   severity   a solid 3px left edge + a shape + a text label
+ *   state      a pill + an icon + a text label
+ *   health     a dot + a shape + a text label
+ *
+ * Nothing is carried by hue alone, so the whole UI survives a colour-blind
+ * reader, a monochrome screenshot and a printed quarterly review.
+ */
+@theme {
+  --color-sev-p1: #f0616d;
+  --color-sev-p2: #d29922;
+  --color-sev-p3: #58a6ff;
+  --color-sev-p4: #98a2b3;
+  --color-health-ok: #3fb950;
+  --color-health-degraded: #d29922;
+  --color-health-down: #f0616d;
+  --color-health-unknown: #667085;
+  --color-health-orphan: #a596ff;
+  --color-brand: #8b6fff;
+  --color-brand-ink: #50d5c5;
+  --color-focus: #7aa7ff;
+
+  /* Workflow state (`docs/02` §Incident). A state is a tinted pill with an
+     icon and its own name. Severity is a 3px left edge instead, so the two
+     never share a channel even where they share a hue. */
+  --color-state-new: #58a6ff;
+  --color-state-acknowledged: #22d3ee;
+  --color-state-in-progress: #58a6ff;
+  --color-state-on-hold: #98a2b3;
+  --color-state-resolved: #3fb950;
+  --color-state-closed: #98a2b3;
+  --color-state-cancelled: #98a2b3;
+
+  /* CI lifecycle. Outlined rather than tinted, so it reads as a different
+     channel from workflow state, and its vocabulary is its own. */
+  --color-lifecycle-proposed: #a596ff;
+  --color-lifecycle-active: #3fb950;
+  --color-lifecycle-in_maintenance: #d29922;
+  --color-lifecycle-retired: #98a2b3;
+  --color-lifecycle-disposed: #98a2b3;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --v-rail-w: 216px;
+  --v-topbar-h: 48px;
+  --v-row-h: 36px;
+  --v-cell-x: 12px;
+  --v-gutter: 24px;
+}
+
+/* The light theme re-points the semantic tokens. Specificity is raised so
+   these beat the `:root` block Tailwind emits for `@theme`. */
+:root[data-theme="light"] {
+  --color-sev-p1: #b42318;
+  --color-sev-p2: #b54708;
+  --color-sev-p3: #175cd3;
+  --color-sev-p4: #475467;
+  --color-health-ok: #067647;
+  --color-health-degraded: #b54708;
+  --color-health-down: #b42318;
+  --color-health-unknown: #98a2b3;
+  --color-health-orphan: #5925dc;
+  --color-brand: #5b3df5;
+  --color-brand-ink: #007f78;
+  --color-focus: #1f5ad0;
+
+  --color-state-new: #175cd3;
+  --color-state-acknowledged: #0e7490;
+  --color-state-in-progress: #175cd3;
+  --color-state-on-hold: #475467;
+  --color-state-resolved: #067647;
+  --color-state-closed: #475467;
+  --color-state-cancelled: #475467;
+
+  --color-lifecycle-proposed: #5925dc;
+  --color-lifecycle-active: #067647;
+  --color-lifecycle-in_maintenance: #b54708;
+  --color-lifecycle-retired: #475467;
+  --color-lifecycle-disposed: #475467;
+}
+
+/* Density is a user preference (docs/04 §Visual Language): compact trades
+   whitespace for rows on screen, and every table in the product reads these
+   variables, so a plugin's table is dense or comfortable on the same terms
+   as the host's. */
+:root[data-density="compact"] {
+  --v-row-h: 28px;
+  --v-cell-x: 8px;
+  --v-gutter: 12px;
+}
+
+/* Add variants based on LiveView classes */
+@custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
+@custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
+@custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
+
+/* Use the data attribute for dark mode  */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* Make LiveView wrapper divs transparent for layout */
+[data-phx-session], [data-phx-teleported-src] { display: contents }
+
+/* ── The shell ───────────────────────────────────────────────────────────────
+ *
+ * Structure only. Everything that can be expressed with a utility class in the
+ * templates is expressed there; what lives here is the geometry that has to
+ * hold for every page at once.
+ */
+.v-shell {
+  display: grid;
+  grid-template-columns: var(--v-rail-w) minmax(0, 1fr);
+  min-height: 100vh;
+  background-color: var(--color-base-100);
+  color: var(--color-base-content);
+}
+
+.v-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.v-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: var(--v-topbar-h);
+  padding-inline: 12px;
+  background-color: var(--color-base-200);
+  border-bottom: 1px solid var(--color-base-300);
+}
+
+.v-content {
+  flex: 1;
+  min-width: 0;
+  padding: var(--v-gutter);
+}
+
+.v-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 8px;
+  background-color: var(--color-base-200);
+  border-right: 1px solid var(--color-base-300);
+}
+
+.v-rail-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding-inline: 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: color-mix(in oklab, var(--color-base-content) 72%, transparent);
+}
+
+.v-rail-link:hover {
+  background-color: var(--color-base-300);
+  color: var(--color-base-content);
+}
+
+.v-rail-link[aria-current="page"] {
+  background-color: color-mix(in oklab, var(--color-brand) 18%, transparent);
+  color: var(--color-base-content);
+  box-shadow: inset 2px 0 0 var(--color-brand);
+}
+
+.v-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--v-row-h);
+  padding-inline: var(--v-cell-x);
+  border-bottom: 1px solid color-mix(in oklab, var(--color-base-300) 70%, transparent);
+}
+
+.v-panel {
+  background-color: var(--color-base-200);
+  border: 1px solid var(--color-base-300);
+  border-radius: 6px;
+}
+
+/* The severity edge. A shape and a label always accompany it, so the edge is
+   reinforcement rather than the sole carrier of meaning. */
+.v-sev-edge {
+  border-left: 3px solid var(--sev-color, var(--color-sev-p4));
+}
+
+.v-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background-color: var(--dot-color, var(--color-health-unknown));
+  flex: none;
+}
+
+/* A state that has not been observed is never drawn as healthy. */
+.v-dot-unknown {
+  background-color: transparent;
+  border: 1px dashed var(--color-health-unknown);
+}
+
+.v-hatch {
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--color-base-content) 14%, transparent) 0 2px,
+    transparent 2px 6px
+  );
+}
+
+/* Focus is always visible. `outline: none` without a replacement is a defect. */
+.v-shell :focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Reduced motion ─────────────────────────────────────────────────────────
+ *
+ * Live data updates never move the viewport, and nothing eases when the
+ * reader has asked the platform not to animate.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Narrow viewports ───────────────────────────────────────────────────────
+ *
+ * The operator's product is a terminal and a wide screen; the enterprise
+ * persona is a laptop. Below the rail's own width the rail becomes a
+ * horizontal strip rather than disappearing, because a navigation you cannot
+ * see is a navigation you cannot use.
+ */
+@media (max-width: 900px) {
+  .v-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v-rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-base-300);
+  }
+}

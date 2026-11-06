@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The Veritas server on macOS. The datastore is a child of the node, so
+     there is one unit and not two: the store starts with the node and stops
+     with it. Runbook: ops/RUNBOOK.md -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.veritas.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <!-- The node reads its environment from the same file the installer
+         writes and the runbook points at, so the web surface's port and the
+         managed datastore's port are the ones the operator configured. The
+         file is optional: a node without it still starts. -->
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>[ -f /etc/veritas/veritas.env ] &amp;&amp; . /etc/veritas/veritas.env; exec /usr/local/opt/veritas/bin/veritas start</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/usr/local/var/veritas</string>
+    <key>VERITAS_ROLE</key>
+    <string>server</string>
+    <key>VERITAS_DATA_DIR</key>
+    <string>/usr/local/var/veritas</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>/usr/local/var/veritas</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/log/veritas/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/log/veritas/server.err.log</string>
+</dict>
+</plist>

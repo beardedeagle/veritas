@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "note": "The shapes the benchmark fixture can build. docs/13 §Performance Engineering Process names this slot 'CI graph shapes, ticket volumes, time-series, vectors'; the graph shapes are here, and the ticket, time-series and vector shapes are named in bench/README.md as work that is not built yet.",
+  "shapes": {
+    "w3": {
+      "label": "W3 shape",
+      "depth": 5,
+      "fan_out": 12,
+      "fan_in": 12,
+      "note": "The shape docs/13 §Workload Model gives the enterprise workload: a CI graph at fan-out 12, deep enough to reach the traversal depth cap of 5. 250 CIs, 249 edges."
+    },
+    "wide": {
+      "label": "breadth-cap shape",
+      "depth": 5,
+      "fan_out": 1000,
+      "fan_in": 0,
+      "note": "Wide enough that the reachable set from the spine head passes the budget's 5,000-node cap, so a traversal has to truncate and say that it did."
+    }
+  }
+}

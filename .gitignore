@@ -1,10 +1,127 @@
-/_build
-/cover
-/deps
-/doc
-/.fetch
+# ── build output ─────────────────────────────────────────────────────────────
+#
+# These patterns have **no leading slash**, so they match at any depth. That
+# matters in an umbrella: Mix writes its build output wherever the working
+# directory was when it ran, so `_build/` appears at the repository root when
+# mix runs from the root, and inside an app when mix runs from that app. A
+# rooted `/_build/` only matches the first case and silently lets the second
+# one into the commit.
+#
+# The build root can be named anything at all — `MIX_BUILD_ROOT` is set to a
+# fresh directory for each run in this project — so the pattern covers the
+# whole family.
+
+# The directory Mix will write compiled artifacts to.
+_build/
+
+# Every build root, whatever it is named.
+_build*/
+.build_*/
+_uibuild/
+.uibuild/
+
+# The directory Cargo writes Rust build output to. A dependency that ships a
+# native library compiles its Rust here, at the repository root, and the
+# output is hundreds of megabytes of object files that are not ours.
+target/
+
+# ── the design corpus ────────────────────────────────────────────────────────
+#
+# `docs/` is the team's design record: the decision register, the data model,
+# the security architecture, the performance budget, the Mnesia and split-brain
+# work. It is working material, not a published artefact, and it is never
+# committed or pushed.
+#
+# Publication scope: keep the entire documentation tree local, including
+# architecture maps and screenshots. Only the root README and required legal
+# files accompany the source, tests and configuration in this snapshot.
+/docs/
+*.md
+!/README.md
+!/TRADEMARK.md
+
+# If you run "mix test --cover", coverage assets end up here.
+cover/
+
+# The directory Mix downloads your dependencies sources to.
+deps/
+
+# Where 3rd-party dependencies like ExDoc output generated docs.
+doc/
+
+# The assets the build toolchain produces from `apps/veritas_web/assets/`.
+# The source is the `assets/` directory; this is esbuild's and Tailwind's
+# output, rebuilt by `mix setup` and by `mix assets.deploy` for a release.
+priv/static/assets/
+
+# The release artefacts the packaging script writes: the tarballs, their
+# checksums and the channel manifests. The release workflow builds them on the
+# runner and publishes them; they are build output, not source, and a local
+# packaging run must not leave one where a commit could pick it up.
+dist/
+
+# Ignore .fetch files in case you like to edit your project deps locally.
+.fetch
+
+# If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
+*.dump
+
+# Also ignore archive artifacts (built via "mix archive.build").
 *.ez
-*.beam
-/config/*.secret.exs
-.elixir_ls/
+
+# Temporary files, for example, from tests.
+tmp/
+
+# local SurrealDB data directories and macOS noise
+.surreal*/
+.DS_Store
+
+# The managed datastore's data directory in a development checkout
+# (`Veritas.Store.Surreal.Server.data_dir/0`). The store is the node's
+# durable state, and it is not source.
+var/
+
+# The registry of launched processes (`mix veritas.launch` writes it). It is
+# runtime state — a list of pids on this machine — and it is not source.
+ops/processes.tsv
+
+# Python bytecode caches from the CI security gate scripts
+__pycache__/
+.ruff_cache/
+*.pyc
+
+# ── orphaned scratch files ───────────────────────────────────────────────────
+#
+# A writer that stages a file under a random name and renames it into place
+# leaves the staged name behind wherever the rename cannot happen. These are
+# zero-byte stubs, they are referenced by nothing, and they must never reach
+# a commit: an untracked directory is added wholesale, so a stub inside
+# apps/ would ship without anyone reading the diff.
+XX*
+*_test_a.txt
+
+# A scratch file left behind by a session whose sandbox refused to delete it.
+# It is six bytes, it is referenced by nothing, and it must never reach a
+# commit. Delete it by hand when the tree is next writable.
+.deleteme_probe
+/ln_probe/
+.!*
+/bench/last-run.json
+
+# The datastore's binary, fetched and verified by `mix veritas.store.install`.
+# It is a build input, not source: it is a third-party artefact, it is large,
+# and it is pinned by digest rather than committed.
+vendor/
+rel/overlays/vendor/
+
+# An Erlang crash dump. The BEAM writes one into its working directory when
+# it dies, and a Plugin's working directory is the host's — which is the
+# repository. A dump is evidence, not source: it is four megabytes of
+# addresses, it is never committed, and the host points a Plugin's dumps at
+# a scratch directory so it never lands here at all.
+erl_crash.dump
+
+# User added ignore filed.
+.codegraph
+.elixir_ls

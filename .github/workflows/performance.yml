@@ -1,0 +1,128 @@
+name: performance
+
+# The performance gate.
+#
+# docs/13 §Performance Engineering Process says it plainly: "A benchmark
+# whose result nobody acts on is a report, not a gate." This workflow is the
+# gate.
+#
+# It is a separate workflow rather than a job inside ci.yml, because ci.yml
+# belongs to the DevOps Engineer, and because a performance gate has a
+# different shape from a correctness gate: it needs a store it owns, it runs
+# for minutes rather than seconds, and its findings are about time rather
+# than about correctness.
+#
+# ## Two modes, and why
+#
+# The gates split into two kinds.
+#
+# The **deterministic** gates — the EXPLAIN plan, the round-trip ceiling,
+# the node cap — do not depend on how fast the machine is. They are the same
+# answer on a laptop and on a dedicated runner, so they run on every pull
+# request.
+#
+# The **latency** gates — the budget breach, the regression against the
+# committed baseline — depend on the machine. docs/13 says "Laptop runs are
+# smoke tests of shape W1 only, and their numbers are never quoted as
+# budgets", and a shared CI runner is a shared CI runner: its numbers are
+# not a budget either. So the full gate runs on the schedule and on demand,
+# where a runner with dedicated hardware can be named.
+#
+# The thresholds are **not** relaxed in either mode. The deterministic mode
+# simply does not apply the thresholds a shared runner cannot measure. To
+# make the pull request job apply the full gate, change the `MODE` below
+# from `check-deterministic` to `check` — on a runner that can measure.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Nightly, off the hour: the full gate, on the run that has the time.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "The gate to apply"
+        required: true
+        type: choice
+        default: check
+        options:
+          - check
+          - check-deterministic
+
+concurrency:
+  group: performance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  # The datastore, pinned by digest. The tag is there for humans; the digest
+  # is what is verified. The same pin the test suite uses, so the benchmark
+  # measures the engine the product ships against.
+  SURREAL_IMAGE: surrealdb/surrealdb:v3.3.4@sha256:649a60a3b9c0177d9923c938e1c2563e48cde2a9d06ac2c0519714be719b02af
+
+jobs:
+  toolchain:
+    name: Toolchain
+    runs-on: ubuntu-24.04
+    outputs:
+      elixir: ${{ steps.pin.outputs.elixir }}
+      otp: ${{ steps.pin.outputs.otp }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read the pinned toolchain
+        id: pin
+        run: |
+          set -euo pipefail
+          elixir_version="$(awk '$1 == "elixir" { print $2 }' .tool-versions)"
+          otp_version="$(awk '$1 == "erlang" { print $2 }' .tool-versions)"
+          if [ -z "$elixir_version" ] || [ -z "$otp_version" ]; then
+            echo "::error::.tool-versions must pin both elixir and erlang"
+            exit 1
+          fi
+          echo "elixir=$elixir_version" >> "$GITHUB_OUTPUT"
+          echo "otp=$otp_version" >> "$GITHUB_OUTPUT"
+
+  performance:
+    name: Performance
+    runs-on: ubuntu-24.04
+    needs: toolchain
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ needs.toolchain.outputs.elixir }}
+          otp-version: ${{ needs.toolchain.outputs.otp }}
+      - run: mix deps.get
+      - name: Hand the pinned datastore to the harness
+        run: |
+          set -euo pipefail
+          # The harness starts a store of its own, on its own port, with its
+          # own data directory: a shared store is shared state, and shared
+          # state is how a benchmark becomes a flake. The binary comes out of
+          # the same pinned image the test suite uses, so the benchmark
+          # measures the engine the product ships against.
+          mkdir -p /tmp/sdb
+          container="$(docker create "$SURREAL_IMAGE")"
+          docker cp "$container:/surreal" /tmp/sdb/surreal
+          docker rm "$container"
+          chmod +x /tmp/sdb/surreal
+          /tmp/sdb/surreal version
+          echo "SURREAL_BIN=/tmp/sdb/surreal" >> "$GITHUB_ENV"
+      - name: The gate
+        env:
+          MODE: ${{ github.event_name == 'pull_request' && 'check-deterministic' || 'check' }}
+          SAMPLES: "30"
+        run: bash .github/scripts/performance_gate.sh
+      - name: The report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-report-${{ github.run_id }}
+          path: bench/last-run.json
+          if-no-files-found: warn

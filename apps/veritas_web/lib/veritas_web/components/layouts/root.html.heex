@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-density={assigns[:shell][:density] || "comfortable"}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <.live_title default="Veritas" suffix=" · Veritas" phx-no-format>{assigns[:page_title]}</.live_title>
+    <meta
+      name="description"
+      content="Veritas — a self-hosted, agentic ITSM and CMDB service. Incident, Service Request, Change, Problem, Vulnerability and Configuration Item, with an append-only Audit Log."
+    />
+    <link rel="icon" type="image/svg+xml" href="/images/veritas-icon.svg" />
+    <link rel="alternate icon" href="/favicon.ico" />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
+    </script>
+    <script>
+      (() => {
+        const systemTheme = () => matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+
+        const setTheme = (theme) => {
+          if (theme === "system") {
+            localStorage.removeItem("phx:theme");
+            document.documentElement.setAttribute("data-theme", systemTheme());
+            document.documentElement.setAttribute("data-theme-source", "system");
+          } else {
+            localStorage.setItem("phx:theme", theme);
+            document.documentElement.setAttribute("data-theme", theme);
+            document.documentElement.setAttribute("data-theme-source", "user");
+          }
+        };
+        if (!document.documentElement.hasAttribute("data-theme")) {
+          setTheme(localStorage.getItem("phx:theme") || "system");
+        }
+        window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
+        window.addEventListener("phx:set-theme", (e) => setTheme(e.detail || e.target?.dataset?.phxTheme || "system"));
+
+        // The theme buttons live in the shell, which the root layout renders
+        // around the page — outside any LiveView's DOM, so LiveView cannot
+        // see a click on them. The theme is a property of the document, so
+        // the document listens for it.
+        document.addEventListener("click", (e) => {
+          const button = e.target.closest && e.target.closest("[data-phx-theme]");
+          if (button) setTheme(button.dataset.phxTheme);
+        });
+
+        matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+          if (document.documentElement.getAttribute("data-theme-source") === "system") {
+            document.documentElement.setAttribute("data-theme", systemTheme());
+          }
+        });
+      })();
+    </script>
+  </head>
+  <body>
+    <Veritas.Web.ShellComponents.shell shell={assigns[:shell]} conn={@conn}>
+      {@inner_content}
+    </Veritas.Web.ShellComponents.shell>
+
+    <script>
+      // The command palette. The disclosure itself is a <details> element and
+      // opens with the keyboard and with no script at all; this only adds the
+      // shortcut and the filter.
+      (() => {
+        const palette = document.getElementById("v-command-palette");
+        if (!palette) return;
+
+        const input = document.getElementById("v-command-input");
+        const items = Array.from(palette.querySelectorAll("[data-command]"));
+
+        const setOpen = (open) => {
+          palette.open = open;
+          if (open && input) input.focus();
+        };
+
+        document.addEventListener("keydown", (event) => {
+          if ((event.metaKey || event.ctrlKey) && (event.key === "k" || event.key === "K")) {
+            event.preventDefault();
+            setOpen(!palette.open);
+            return;
+          }
+          if (event.key === "Escape" && palette.open) {
+            setOpen(false);
+          }
+        });
+
+        if (input) {
+          input.addEventListener("input", () => {
+            const needle = (input.value || "").trim().toLowerCase();
+            items.forEach((item) => {
+              const haystack = ((item.dataset.command || "") + " " + item.textContent).toLowerCase();
+              item.hidden = needle.length > 0 && !haystack.includes(needle);
+            });
+          });
+        }
+
+        items.forEach((item) => item.addEventListener("click", () => setOpen(false)));
+      })();
+    </script>
+  </body>
+</html>

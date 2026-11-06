@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-density={@density}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <title>Sign in · Veritas</title>
+    <meta
+      name="description"
+      content="Veritas — a self-hosted, agentic ITSM and CMDB service. Sign in to the service desk, the CMDB and the Audit Log."
+    />
+    <link rel="icon" type="image/svg+xml" href="/images/veritas-icon.svg" />
+    <link rel="alternate icon" href="/favicon.ico" />
+    <link phx-track-static rel="stylesheet" href="/assets/css/app.css" />
+    <script defer phx-track-static type="text/javascript" src="/assets/js/app.js">
+    </script>
+    <script>
+      // The theme is the reader's, and it is theirs before they sign in: the
+      // shell stores it in local storage, so the sign-in page reads it too
+      // rather than showing the default to somebody who chose otherwise.
+      (() => {
+        try {
+          const theme = localStorage.getItem("phx:theme");
+          if (theme === "light" || theme === "dark") {
+            document.documentElement.setAttribute("data-theme", theme);
+          }
+        } catch (error) {
+          // A browser that will not give us storage still gets the default.
+        }
+      })();
+    </script>
+  </head>
+  <body class="min-h-screen bg-base-100 text-base-content antialiased">
+    <div class="grid min-h-screen grid-cols-1 lg:grid-cols-12">
+      <aside class="order-2 border-t border-base-300 bg-base-200 px-6 py-8 lg:order-1 lg:col-span-5 lg:flex lg:flex-col lg:border-t-0 lg:border-r lg:px-10 lg:py-12">
+        <div class="hidden items-center gap-2.5 lg:flex">
+          <img src="/images/veritas-icon.svg" alt="" width="28" height="28" class="rounded-[7px]" />
+          <span class="text-[15px] font-semibold tracking-tight">Veritas</span>
+        </div>
+
+        <div class="lg:mt-12">
+          <p class="text-[11px] font-medium uppercase tracking-wide text-base-content/45">
+            On this Node
+          </p>
+
+          <dl class="mt-5 flex flex-col gap-5">
+            <div class="flex gap-3">
+              <.icon name="hero-lock-closed" class="mt-0.5 size-4 shrink-0 text-base-content/40" />
+              <div class="min-w-0">
+                <dt class="text-[13px] font-medium">The password is checked here</dt>
+                <dd class="mt-1 text-xs leading-5 text-base-content/60">
+                  Argon2id, before it is stored. An unknown account and a wrong password are
+                  refused in the same time, so this page cannot be used to find out which
+                  accounts exist.
+                </dd>
+              </div>
+            </div>
+
+            <div class="flex gap-3">
+              <.icon
+                name="hero-document-text"
+                class="mt-0.5 size-4 shrink-0 text-base-content/40"
+              />
+              <div class="min-w-0">
+                <dt class="text-[13px] font-medium">The attempt is recorded</dt>
+                <dd class="mt-1 text-xs leading-5 text-base-content/60">
+                  A sign-in, a refusal and a sign-out are each written to the append-only Audit
+                  Log. So is a password reset.
+                </dd>
+              </div>
+            </div>
+
+            <div class="flex gap-3">
+              <.icon name="hero-server-stack" class="mt-0.5 size-4 shrink-0 text-base-content/40" />
+              <div class="min-w-0">
+                <dt class="text-[13px] font-medium">Local accounts, no single sign-on yet</dt>
+                <dd class="mt-1 text-xs leading-5 text-base-content/60">
+                  Veritas authenticates the accounts you created on this Node. Federated identity
+                  is not implemented yet, and this page does not pretend it is.
+                </dd>
+              </div>
+            </div>
+          </dl>
+        </div>
+
+        <div class="mt-10 hidden text-[11px] leading-4 text-base-content/40 lg:mt-auto lg:block lg:pt-10">
+          <p>Self-hosted. No account. No phone home.</p>
+          <p class="mt-1 font-mono">Apache-2.0</p>
+        </div>
+      </aside>
+
+      <main class="order-1 flex flex-col justify-center px-5 py-10 sm:px-8 lg:order-2 lg:col-span-7 lg:px-12">
+        <div class="mx-auto w-full max-w-sm">
+          <div class="mb-8 flex items-center gap-2.5 lg:hidden">
+            <img
+              src="/images/veritas-icon.svg"
+              alt=""
+              width="28"
+              height="28"
+              class="rounded-[7px]"
+            />
+            <span class="text-[15px] font-semibold tracking-tight">Veritas</span>
+          </div>
+
+          <h1 class="text-xl font-semibold tracking-tight">Sign in</h1>
+          <p class="mt-1.5 text-sm text-base-content/60">
+            The service desk, the CMDB and the Audit Log, on this Node.
+          </p>
+
+          <div class="v-panel mt-6 p-5 sm:p-6">
+            <form id="signin-form" method="post" action="/session" class="flex flex-col gap-4">
+              <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+              <input type="hidden" name="workspace" value={@workspace} />
+
+              <div
+                id="signin-notice"
+                role="alert"
+                hidden
+                class="alert border border-error/40 bg-error/10 text-base-content"
+              >
+                <.icon name="hero-exclamation-circle" class="size-5 shrink-0 text-error" />
+                <div>
+                  <p id="signin-notice-title" class="font-medium text-error"></p>
+                  <p id="signin-notice-body" class="mt-0.5 text-xs leading-5 text-base-content/70">
+                  </p>
+                </div>
+              </div>
+
+              <label class="flex flex-col gap-1.5">
+                <span class="text-[11px] font-medium uppercase tracking-wide text-base-content/45">
+                  Email
+                </span>
+                <input
+                  id="signin-email"
+                  type="email"
+                  name="email"
+                  autocomplete="username"
+                  required
+                  autofocus
+                  class="rounded border border-base-300 bg-base-100 px-3 py-2.5 text-sm text-base-content outline-none transition-colors placeholder:text-base-content/35 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)]"
+                />
+              </label>
+
+              <label class="flex flex-col gap-1.5">
+                <span class="text-[11px] font-medium uppercase tracking-wide text-base-content/45">
+                  Password
+                </span>
+                <input
+                  id="signin-password"
+                  type="password"
+                  name="password"
+                  autocomplete="current-password"
+                  required
+                  class="rounded border border-base-300 bg-base-100 px-3 py-2.5 text-sm text-base-content outline-none transition-colors placeholder:text-base-content/35 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)]"
+                />
+              </label>
+
+              <button
+                id="signin-submit"
+                type="submit"
+                class="mt-1 rounded bg-primary px-3 py-2.5 text-sm font-medium text-primary-content transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Sign in
+              </button>
+            </form>
+          </div>
+
+          <p class="mt-6 text-xs leading-relaxed text-base-content/50">
+            There is no self-service reset. An operator resets a password on the
+            Node with <code class="font-mono">mix veritas.cli account set-password</code>,
+            and the reset is written to the Audit Log.
+          </p>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      // The sign-in form, submitted without leaving the page.
+      //
+      // The controller answers a refused credential with a 401 and a JSON body —
+      // the same answer for a wrong password and for an account that does not
+      // exist, because the difference is the Audit Log's to keep and not the
+      // page's to disclose. Left alone, a browser would render that JSON to
+      // the person who mistyped their password. This submits the form itself
+      // and says something useful instead.
+      //
+      // Without JavaScript the form still posts and still signs in; only the
+      // refusal path degrades, and the noscript note below says so.
+      (() => {
+        const form = document.getElementById("signin-form");
+        if (!form) return;
+
+        const button = document.getElementById("signin-submit");
+        const email = document.getElementById("signin-email");
+        const password = document.getElementById("signin-password");
+        const notice = document.getElementById("signin-notice");
+        const noticeTitle = document.getElementById("signin-notice-title");
+        const noticeBody = document.getElementById("signin-notice-body");
+        const label = button.textContent;
+
+        const say = (title, body) => {
+          noticeTitle.textContent = title;
+          noticeBody.textContent = body;
+          notice.hidden = false;
+        };
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          notice.hidden = true;
+          button.disabled = true;
+          button.textContent = "Signing in…";
+
+          try {
+            const params = new URLSearchParams();
+            new FormData(form).forEach((value, key) => params.append(key, value));
+
+            const response = await fetch(form.action, {
+              method: "POST",
+              body: params,
+              headers: { "Accept": "text/html" },
+              credentials: "same-origin",
+              redirect: "follow",
+            });
+
+            if (response.status === 401) {
+              say(
+                "Those credentials were refused.",
+                "The email and the password are checked together, so this page cannot say which was wrong. The Audit Log records which, and so can your operator."
+              );
+              password.value = "";
+              email.focus();
+              return;
+            }
+
+            if (!response.ok) {
+              say(
+                "The server refused the sign-in.",
+                "It did not say why. Try again, and if it keeps happening, read the Node's log."
+              );
+              return;
+            }
+
+            const target = response.url || "/";
+            if (target.indexOf("/session") !== -1) {
+              say(
+                "Signed in, but no session was opened.",
+                "The Node accepted the credential and did not open a session. Its log will say why."
+              );
+              return;
+            }
+
+            window.location.assign(target);
+          } catch (error) {
+            say(
+              "The Node could not be reached.",
+              "Nothing was sent. Check that Veritas is running on this address, then try again."
+            );
+          } finally {
+            button.disabled = false;
+            button.textContent = label;
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

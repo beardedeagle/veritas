@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The Veritas process reaper on macOS.
+     Every `mix phx.server` and every test run starts a process, and a process
+     left running accumulates. This unit reaps the ones that are provably ours
+     — the working directory is inside this repository, or the pid is in
+     ops/processes.tsv — and nothing else. The developer's other BEAM projects
+     are not ours and are never touched, and neither is anything serving a
+     port in VERITAS_KEEP_PORTS (the live instances and the store on :8010).
+     The policy is `mix veritas.reap`: one implementation, in Elixir, over the
+     facts a platform adapter gathers.
+     Runbook: ops/RUNBOOK.md
+     Remove it with: launchctl bootout gui/$(id -u)/com.veritas.reaper -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.veritas.reaper</string>
+  <key>ProgramArguments</key>
+  <array>
+    <!-- Resolved by ops/install-reaper.sh; do not load this template directly. -->
+    <string>__VERITAS_MIX__</string>
+    <string>veritas.reap</string>
+    <string>--go</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Capture the installing operator's toolchain search path. -->
+    <key>PATH</key>
+    <string>__VERITAS_PATH__</string>
+    <!-- The installer preserves the protected-port defaults unless the
+         operator supplies VERITAS_KEEP_PORTS at installation time. -->
+    <key>VERITAS_KEEP_PORTS</key>
+    <string>__VERITAS_KEEP_PORTS__</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>__VERITAS_ROOT__</string>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__VERITAS_ROOT__/var/log/reaper.log</string>
+  <key>StandardErrorPath</key>
+  <string>__VERITAS_ROOT__/var/log/reaper.err.log</string>
+</dict>
+</plist>

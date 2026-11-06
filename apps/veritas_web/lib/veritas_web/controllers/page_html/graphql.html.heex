@@ -1,0 +1,61 @@
+<Layouts.app flash={@flash}>
+  <header class="mb-6">
+    <p class="text-[11px] uppercase tracking-wide text-base-content/45">API</p>
+    <h1 class="mt-1 text-xl font-semibold tracking-tight">The GraphQL endpoint</h1>
+    <p class="mt-2 max-w-2xl text-[13px] leading-6 text-base-content/60">
+      Veritas has one service layer, and three faces on it: this interface, the CLI, and the
+      GraphQL API. A change made through any one of them is a change through all of them, and
+      it lands in the same Audit Log.
+    </p>
+  </header>
+
+  <section class="v-panel px-4 py-4">
+    <h2 class="text-[13px] font-semibold tracking-tight">The endpoint answers POST, not GET</h2>
+    <p class="mt-2 text-[13px] leading-6 text-base-content/65">
+      A GraphQL query is a body, not a path, so the endpoint is <span class="font-mono text-base-content">POST&nbsp;/graphql</span>. A browser that
+      navigates to <span class="font-mono text-base-content">/graphql</span> with a GET lands
+      on this page instead of on a query result.
+    </p>
+
+    <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div>
+        <p class="text-[11px] uppercase tracking-wide text-base-content/45">Query it</p>
+        <pre class="mt-1 overflow-x-auto rounded-md border border-base-300 bg-base-100 p-3 font-mono text-[12px] leading-5"><code>curl -s http://127.0.0.1:4000/graphql \
+  -H 'content-type: application/json' \
+  --data '&lbrace;"query":"&lbrace; __typename &rbrace;"&rbrace;'</code></pre>
+      </div>
+      <div>
+        <p class="text-[11px] uppercase tracking-wide text-base-content/45">Browse it</p>
+        <p class="mt-1 text-[13px] leading-6 text-base-content/65">
+          The GraphiQL IDE is served at <a
+            href="/graphql/i"
+            class="text-brand underline underline-offset-2"
+          >/graphql/i</a>.
+          It runs against the same schema, against this same installation.
+        </p>
+        <a
+          href="/graphql/i"
+          class="mt-2 inline-flex items-center gap-1.5 text-[13px] text-brand underline underline-offset-2"
+        >
+          Open GraphiQL <span aria-hidden="true">&rarr;</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="v-panel mt-3 px-4 py-4">
+    <h2 class="text-[13px] font-semibold tracking-tight">What is in the schema today</h2>
+    <p class="mt-2 text-[13px] leading-6 text-base-content/65">
+      The schema is owned by the service layer, and it grows as the domain does. The
+      Incidents, the Audit Log and the Configuration Items are the parts that exist now; the
+      Changes, the Service Requests, the Problems and the Vulnerabilities are ticket types the
+      domain already knows, and they join the schema as their screens arrive.
+    </p>
+    <p class="mt-2 text-[13px] leading-6 text-base-content/65">
+      The schema is the one source of truth for what a query can ask for, so
+      <span class="font-mono text-base-content">/graphql/i</span>
+      is always the authoritative
+      answer to that question — the documentation can be a release behind it, and this cannot.
+    </p>
+  </section>
+</Layouts.app>

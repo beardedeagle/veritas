@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="120" viewBox="0 0 480 120" role="img" aria-labelledby="title">
+  <title id="title">Veritas</title>
+  <g transform="translate(12 12)">
+    <path fill="#6D4AFF" d="M8 16H30L59 78L48 96Z"/>
+    <path fill="#007F78" d="M66 16H88L48 96L37 73Z"/>
+  </g>
+  <text x="124" y="84" fill="#172033" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="66" font-weight="650" letter-spacing="-2.5">Veritas</text>
+</svg>

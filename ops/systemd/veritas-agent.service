@@ -1,0 +1,56 @@
+# The endpoint Agent — the collector on a monitored host.
+#
+# It is deliberately NOT a Node: it does not join the cluster and holds no
+# cookie, because a cluster member can run code as the node, and an agent on
+# a thousand laptops must not be able to.
+#
+# The collector is a **separate first-party release** (docs/12): it is
+# installed on the host it watches, not on the server. This unit therefore
+# belongs to the collector's own release, and its path is the collector's.
+
+[Unit]
+Description=Veritas Endpoint Agent
+Documentation=file:///opt/veritas/ops/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/veritas-collector/agent.conf
+
+[Service]
+Type=simple
+User=veritas-agent
+Group=veritas-agent
+Environment=HOME=/var/lib/veritas-agent
+Environment=VERITAS_ROLE=agent
+EnvironmentFile=-/etc/veritas-collector/agent.env
+WorkingDirectory=/var/lib/veritas-agent
+ExecStart=/opt/veritas-collector/bin/veritas start
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+KillMode=mixed
+OOMPolicy=stop
+MemoryHigh=256M
+MemoryMax=384M
+MemorySwapMax=0
+TasksMax=4096
+LimitNOFILE=16384
+LimitCORE=0
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/var/lib/veritas-agent /var/log/veritas
+CapabilityBoundingSet=
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=veritas-agent
+
+[Install]
+WantedBy=multi-user.target

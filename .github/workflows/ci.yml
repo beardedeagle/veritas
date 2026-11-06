@@ -1,0 +1,306 @@
+# Veritas CI.
+#
+# One pipeline, one set of gates. Every job calls the same `mix` aliases a
+# contributor runs locally, so the pipeline and a laptop cannot drift apart:
+# there is no second implementation of a check anywhere in this repository.
+#
+# Two things are pinned, and each is pinned in one place:
+#
+#   * the toolchain — `.tool-versions`, read from here, never written twice;
+#   * the datastore — one image, pinned by digest, which supplies both the
+#     service container the migration runs against and the binary the test
+#     suite runs against, so the two are the same engine.
+#
+# The free SurrealDB build cannot cluster (one store per Datacenter), so
+# there is no clustering job here. A job that asserts clustering would be
+# asserting something the datastore cannot do, and a job that skips it
+# silently is worse than no job.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    # Nightly: the same gates without a commit, so a break that only shows up
+    # after a dependency or a runner image moves is caught on its own.
+    - cron: "17 3 * * *"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  # The datastore, pinned by digest. The tag is there for humans; the digest
+  # is what is verified.
+  SURREAL_IMAGE: surrealdb/surrealdb:v3.3.4@sha256:649a60a3b9c0177d9923c938e1c2563e48cde2a9d06ac2c0519714be719b02af
+
+jobs:
+  action-pins:
+    name: Action pins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      # The check reads the repository's own workflow files.
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - name: Every third-party action is pinned to a commit SHA
+        # A tag can be moved, so `uses: owner/action@v1` is a promise about
+        # whatever the tag points at when the job starts. This check keeps
+        # that from happening silently, and it is the same check the
+        # release pipeline runs before it publishes anything.
+        run: bash .github/scripts/check-action-pins.sh
+
+  toolchain:
+    name: Toolchain
+    runs-on: ubuntu-24.04
+    outputs:
+      elixir: ${{ steps.pin.outputs.elixir }}
+      otp: ${{ steps.pin.outputs.otp }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read the pinned toolchain
+        id: pin
+        run: |
+          set -euo pipefail
+          elixir_version="$(awk '$1 == "elixir" { print $2 }' .tool-versions)"
+          otp_version="$(awk '$1 == "erlang" { print $2 }' .tool-versions)"
+          if [ -z "$elixir_version" ] || [ -z "$otp_version" ]; then
+            echo "::error::.tool-versions must pin both elixir and erlang"
+            exit 1
+          fi
+          echo "elixir=$elixir_version" >> "$GITHUB_OUTPUT"
+          echo "otp=$otp_version" >> "$GITHUB_OUTPUT"
+          echo "Pinned: Elixir $elixir_version, Erlang/OTP $otp_version"
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ steps.pin.outputs.elixir }}
+          otp-version: ${{ steps.pin.outputs.otp }}
+      - name: Fetch the dependencies
+        run: mix deps.get
+      - name: Restore the compiled dependencies
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: >-
+            build-${{ runner.os }}-${{ env.MIX_ENV }}-${{
+            hashFiles('mix.lock') }}-elixir-${{
+            needs.toolchain.outputs.elixir }}-otp-${{ needs.toolchain.outputs.otp }}
+      - name: Compile the application the check task lives in
+        # The check is a Mix task, and Mix finds a task only in a compiled
+        # application. With an empty dependency and build directory the task
+        # is not there at all, and the job fails on an unchecked dependency
+        # instead of on a toolchain. One application is enough: the task
+        # lives in veritas_core.
+        run: mix do --app veritas_core cmd mix compile
+      - name: Check the toolchain against the pin
+        # The drift check. A build on a different toolchain is a different
+        # build, so the pipeline asserts that what it installed is what
+        # `.tool-versions` names, rather than trusting that it installed it.
+        run: mix veritas.toolchain
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    needs: toolchain
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ needs.toolchain.outputs.elixir }}
+          otp-version: ${{ needs.toolchain.outputs.otp }}
+      - name: Install the secret scanner
+        run: bash .github/scripts/install-gitleaks.sh
+      - name: Scan the history
+        # The whole history, not the working tree: a secret is still a secret
+        # after it is deleted, and it is in the history for as long as the
+        # repository exists.
+        run: mix veritas.secrets
+
+  format:
+    name: Format
+    runs-on: ubuntu-24.04
+    needs: toolchain
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ needs.toolchain.outputs.elixir }}
+          otp-version: ${{ needs.toolchain.outputs.otp }}
+      - run: mix deps.get
+      - run: mix ci.format
+
+  lint:
+    name: Credo
+    runs-on: ubuntu-24.04
+    needs: toolchain
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ needs.toolchain.outputs.elixir }}
+          otp-version: ${{ needs.toolchain.outputs.otp }}
+      - run: mix deps.get
+      - run: mix ci.lint
+
+  audit:
+    name: Dependency advisories
+    runs-on: ubuntu-24.04
+    needs: toolchain
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ needs.toolchain.outputs.elixir }}
+          otp-version: ${{ needs.toolchain.outputs.otp }}
+      - name: Audit the locked dependencies
+        # The CVE gate of `docs/09` §6.5, over the shared lockfile. The audit
+        # reads the lockfile and the advisory database, so it runs without
+        # compiling the dependencies.
+        #
+        # A known advisory refuses the build. The only way past it is a
+        # dated, audited exception in `.github/security-exceptions.json`.
+        run: python3 .github/scripts/security_gate.py hex
+
+  advisories:
+    name: Advisory sweep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install osv-scanner
+        # Pinned by version and verified against the published checksums.
+        run: bash .github/scripts/install-osv-scanner.sh
+      - name: The lockfile against the OSV database
+        # A second database over the same packages, and the one that reads
+        # the lockfile: `mix hex.audit` and osv-scanner fail independently.
+        run: python3 .github/scripts/security_gate.py osv
+      - name: The dependencies that are not on Hex
+        # The two git dependencies are invisible to the Hex advisory
+        # database, so they are swept against the GitHub advisory database
+        # and OSV by repository and by package name.
+        run: python3 .github/scripts/security_gate.py git-deps
+
+  types:
+    name: Dialyzer (${{ matrix.app }})
+    runs-on: ubuntu-24.04
+    needs: toolchain
+    timeout-minutes: 45
+    strategy:
+      # One application fails; the others still report. A type error in one
+      # application is not a reason to hide the other three.
+      fail-fast: false
+      matrix:
+        app: [veritas_core, veritas_agent, veritas_plugin, veritas_web]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ needs.toolchain.outputs.elixir }}
+          otp-version: ${{ needs.toolchain.outputs.otp }}
+      - run: mix deps.get
+      - name: Cache the PLTs
+        uses: actions/cache@v4
+        with:
+          path: _build/dialyzer
+          key: >-
+            plt-${{ matrix.app }}-${{ runner.os }}-${{
+            hashFiles('mix.lock') }}-elixir-${{
+            needs.toolchain.outputs.elixir }}-otp-${{ needs.toolchain.outputs.otp }}
+      - name: Analyse
+        # This is the `ci.types` alias expanded for one application: the
+        # alias runs `mix dialyzer` in every child app, and the matrix runs
+        # them in parallel rather than in sequence, so one failing
+        # application does not hide the other three. `--format short` only
+        # changes the output, not the analysis.
+        run: mix dialyzer --format short
+        working-directory: apps/${{ matrix.app }}
+
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    needs: toolchain
+    timeout-minutes: 30
+    services:
+      surrealdb:
+        # Pinned by digest, and the image carries its own health check
+        # (`/surreal isready`), so the job does not start against a store
+        # that is not listening yet.
+        image: surrealdb/surrealdb:v3.3.4@sha256:649a60a3b9c0177d9923c938e1c2563e48cde2a9d06ac2c0519714be719b02af
+        env:
+          SURREAL_USER: root
+          SURREAL_PASS: root
+        ports:
+          - 8000:8000
+    env:
+      VERITAS_SURREAL_URL: http://127.0.0.1:8000
+      VERITAS_SURREAL_USER: root
+      VERITAS_SURREAL_PASS: root
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ needs.toolchain.outputs.elixir }}
+          otp-version: ${{ needs.toolchain.outputs.otp }}
+      - run: mix deps.get
+      - name: Hand the pinned datastore to the test suite
+        run: |
+          set -euo pipefail
+          # The suite starts its own store, on its own port, with its own data
+          # directory: a shared store is shared state, and shared state is how
+          # an integration test becomes a flake. The binary comes out of the
+          # same pinned image as the service container, so the store the
+          # suite runs against is the same engine as the one the migration
+          # ran against. The directory is created here: a fresh runner has
+          # no /tmp/sdb, and the copy is what fails without it.
+          mkdir -p /tmp/sdb
+          container="$(docker create "$SURREAL_IMAGE")"
+          docker cp "$container:/surreal" /tmp/sdb/surreal
+          docker rm "$container"
+          chmod +x /tmp/sdb/surreal
+          /tmp/sdb/surreal version
+          echo "SURREAL_BIN=/tmp/sdb/surreal" >> "$GITHUB_ENV"
+      - name: Apply the schema to the datastore
+        run: mix veritas.cli migrate --workspace ci_migrate
+      - name: Check the datastore
+        # A smoke test, not a gate: the doctor reports the Audit Log chain as
+        # a fault when the chain is empty, and the CI workspace has no rows
+        # yet. It still tells the operator that the store answered and that
+        # the schema is where it should be.
+        continue-on-error: true
+        run: mix veritas.cli doctor --workspace ci_migrate
+      - run: mix ci.test
+
+  prod-compile:
+    name: Compile (prod)
+    runs-on: ubuntu-24.04
+    needs: toolchain
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ needs.toolchain.outputs.elixir }}
+          otp-version: ${{ needs.toolchain.outputs.otp }}
+      - name: Fetch the production dependencies
+        run: mix deps.get --only prod
+      - name: Compile the applications in prod
+        # The release is a `prod` build, and a module can be green in `dev`
+        # and red in `prod`: the parallel compiler resolves a module used by a
+        # `plug` macro only when the two are in different files, and whether
+        # it happens to resolve is a scheduling accident. A `dev`-green tree
+        # that cannot produce a release is a CI gap, not a code bug, so the
+        # prod compile is a gate of its own rather than a step inside the
+        # release assembly.
+        run: mix compile --warnings-as-errors
+        env:
+          MIX_ENV: prod
+

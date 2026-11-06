@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.veritas.scheduler</string>
+  <key>ProgramArguments</key>
+  <array>
+    <!-- The same environment file the server reads, so both roles of one
+         release are configured from one place. -->
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>[ -f /etc/veritas/veritas.env ] &amp;&amp; . /etc/veritas/veritas.env; exec /usr/local/opt/veritas/bin/veritas start</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/usr/local/var/veritas</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>/usr/local/var/veritas</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/log/veritas/scheduler.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/log/veritas/scheduler.err.log</string>
+</dict>
+</plist>

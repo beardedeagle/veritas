@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Veritas</title>
+  <rect width="128" height="128" rx="28" fill="#111827"/>
+  <g transform="translate(16 8)">
+    <path fill="#A596FF" d="M8 16H30L59 78L48 96Z"/>
+    <path fill="#50D5C5" d="M66 16H88L48 96L37 73Z"/>
+  </g>
+</svg>

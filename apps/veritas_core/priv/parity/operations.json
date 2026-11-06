@@ -1,0 +1,1307 @@
+{
+  "meta": {
+    "contract": {
+      "source": "docs/04-information-architecture-and-dashboards.md",
+      "clause_line": 479,
+      "scope_line": 481,
+      "text": "Must exist identically in CLI verb, GraphQL mutation, and UI control: create / update / transition / comment / assign on Incident, Change, Service Request, Problem, and Vulnerability; CI create / update / retire; relationship create / delete; CI query by attribute, type, or relationship; global search and the same filter grammar; bulk transition and bulk assign; Audit Log query and export (CSV/JSONL); dashboard report generation; Agent run start / status / approve / reject / transcript; discovery trigger, Adapter list, and CI observation fetch.",
+      "scope_text": "Every operation named above is in scope for the MVP, on all three surfaces - CLI verb, GraphQL mutation and UI control - and the MVP is not met while any one of them is missing from any one surface."
+    },
+    "coverage_states": {
+      "missing": "no binding exists for this operation on this surface.",
+      "implemented-unverified": "a binding exists (the surface has the verb/mutation/event) but no independent test proves its behaviour.",
+      "behaviorally-verified": "a binding exists AND an independent behavioural test exercises it."
+    },
+    "counting_rule": "The denominator is the number of REQUIRED BINDINGS: (number of contract operations) x (number of surfaces each applies to). A ticket operation applies to three surfaces, and its ticket types multiply the number of OPERATIONS rather than the number of bindings. The arithmetic is: five ticket verbs (create, update, transition, comment, assign) x five ticket types (Incident, Change, Service Request, Problem, Vulnerability) = 25 operations; CI create, update and retire = 3 (28); relationship create and delete = 2 (30); CI query by attribute, type or relationship = 1 (31); global search = 1 (32); bulk transition and bulk assign = 2 (34); Audit Log query and export = 2 (36); dashboard report generation = 1 (37); five Agent run verbs = 5 (42); discovery trigger, Adapter list and CI observation fetch = 3 (45). Forty-five operations x three surfaces = 135 required bindings.",
+    "counting_notes": [
+      "CI query by attribute, type, or relationship is ONE operation with THREE query modes, not three operations. docs/06:395 names one ciSearch(filter, page).",
+      "The same filter grammar is NOT an operation. It is the constraint that the CI query and global search share one grammar, and it is recorded in meta.filter_grammar rather than as a row with bindings.",
+      "Audit Log export (CSV/JSONL) is ONE operation with TWO formats, not two operations.",
+      "Agent run approve and Agent run reject are two operations; one GraphQL mutation may serve both, and a manifest entry may name one binding for two operations.",
+      "The ticket types multiply the operation count, so the manifest holds one entry per ticket verb with its applicable types, and the check expands each entry across its types.",
+      "A forged-event negative control — a test that clicks an event no rendered control carries, to prove the handler refuses it — is legitimate behavioural coverage and is not marked as a gap.",
+      "An operation may carry aspects: the sub-scopes the contract names inside it, such as the five ticket types or the query modes of a CI query. A binding's state says the surface offers the operation; an aspect's state says what the surface does inside it. The two are reported separately, because a binding can be proved for one ticket type and untested for the other four.",
+      "The 25 grouped entries expand to 45 operations and 135 binding rollups. Contract.obligations/1 separately enumerates 150 aspect/grammar obligation records: 48 ordinary cells plus two shared-grammar applications per surface. These are different units, not passing-test counts."
+    ],
+    "enumeration": {
+      "ticket.create": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "ticket.update": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "ticket.transition": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "ticket.comment": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "ticket.assign": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "ci.create": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "ci.update": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "ci.retire": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "relationship.create": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "relationship.delete": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "ci.query": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "search.global": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bulk.transition": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bulk.assign": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "audit.query": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "audit.export": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "dashboard.report": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "agent_run.start": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "agent_run.status": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "agent_run.approve": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "agent_run.reject": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "agent_run.transcript": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "discovery.trigger": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "adapter.list": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "ci.observation_fetch": [
+        "cli",
+        "graphql",
+        "ui"
+      ]
+    },
+    "measured_against": {
+      "cli": "apps/veritas_core/lib/mix/tasks/veritas.cli.ex",
+      "graphql": "apps/veritas_web/lib/veritas_web/graphql/schema.ex",
+      "ui": "apps/veritas_web/lib/veritas_web/live",
+      "note": "Each binding's location names where the binding was found; a missing binding has no location because there is nothing to point at."
+    },
+    "filter_grammar": {
+      "source": "docs/04-information-architecture-and-dashboards.md:479",
+      "text": "global search and the same filter grammar",
+      "ruling": "representation-only; no requirement interpretation is accepted",
+      "why": "The clause constrains two operations the sentence has already named — the CI query and global search — by requiring them to share one filter grammar. A grammar has no CLI verb, no GraphQL mutation and no UI control, so it cannot carry a binding. The manifest's own row proved it: it bound the grammar to the tickets list verb, the tickets query and the audit filter form, which are three other operations.",
+      "applies_to": [
+        "ci.query",
+        "search.global"
+      ],
+      "open_question": "docs/06:408 names CiFilter { status, type, provider, tag, nameContains, updatedSince }. The current GraphQL cis field instead takes flat ci_type, lifecycle_state and criticality predicates (schema.ex:130-137). criticality is not one of those six members; status/lifecycle_state equivalence is not established here. Flat row comparisons do not establish the required shared CI/global-search grammar. Its equivalence and scope remain open; this audit accepts no interpretation.",
+      "states": {
+        "cli": "open",
+        "graphql": "open",
+        "ui": "open"
+      },
+      "proof_note": "This is an explicit required proof obligation for both ci.query and search.global. Open is unproved and cannot pass strict --proof. The 45-operation representation does not accept a grammar or reduce the MVP."
+    },
+    "aspect_states": {
+      "behaviorally-verified": "an independent behavioural test exercises this aspect on this surface.",
+      "implemented-unverified": "the capability is there on this surface, and no independent test proves it for this aspect.",
+      "missing": "the capability is absent on this surface.",
+      "open": "an unresolved requirement, not proof. Inventory reports it separately; strict --proof refuses it until the requirement and its independent proof are settled.",
+      "not-examined": "an unexamined declaration, not proof. Inventory reports it separately; strict --proof cannot pass this required cell."
+    },
+    "audit": {
+      "date": "2026-11-04",
+      "method": "Read the CLI dispatch, GraphQL query/mutation definitions, reachable LiveViews, domain callers and cited tests. This is a declarative source audit, NOT an execution receipt. Strict --proof executes independently authored cases in fresh BEAM workers, validates exact ExUnit events and requires confirmed worker shutdown. The existing datastore guardian owns native store teardown. Source filenames, line numbers, declared statuses and this audit do not certify themselves; current execution receipts are separate evidence.",
+      "audited_operations": [
+        "ticket.create", "ticket.update", "ticket.transition", "ticket.comment", "ticket.assign",
+        "ci.create", "ci.update", "ci.retire", "relationship.create", "relationship.delete",
+        "ci.query", "search.global", "bulk.transition", "bulk.assign", "audit.query", "audit.export",
+        "dashboard.report", "agent_run.start", "agent_run.status", "agent_run.approve", "agent_run.reject",
+        "agent_run.transcript", "discovery.trigger", "adapter.list", "ci.observation_fetch"
+      ],
+      "unaudited_operations": [],
+      "previously_unexamined": {
+        "bulk.transition": {"classification": "missing", "sources": ["apps/veritas_core/lib/mix/tasks/veritas.cli.ex:139", "apps/veritas_web/lib/veritas_web/graphql/schema.ex:184", "apps/veritas_web/lib/veritas_web/live/incident_live/show.ex:93"], "note": "Only single-ticket transitions are bound. Queue tabs and per-ticket event handlers do not expose a bulk action."},
+        "bulk.assign": {"classification": "missing", "sources": ["apps/veritas_core/lib/mix/tasks/veritas.cli.ex:139", "apps/veritas_web/lib/veritas_web/graphql/schema.ex:184", "apps/veritas_web/lib/veritas_web/ticket_queue.ex:1"], "note": "Neither individual assignment nor bulk assignment has a surface binding; list filtering does not assign ownership."},
+        "audit.export": {"classification": "missing", "sources": ["apps/veritas_core/lib/mix/tasks/veritas.cli.ex:355", "apps/veritas_web/lib/veritas_web/graphql/schema.ex:164", "apps/veritas_web/lib/veritas_web/live/admin_live/audit.ex:54"], "note": "CLI audit verify and public auditVerification (internal :audit_verification) verify chain integrity, not Audit Log rows. The Audit Log LiveView reads entries and filters them server-side. Neither verification nor those reads expose CSV/JSONL export; both formats remain required on every surface, with six missing format-specific obligation records."},
+        "dashboard.report": {"classification": "missing", "sources": ["apps/veritas_web/lib/veritas_web/live/shell/home_live.ex:78", "apps/veritas_core/lib/veritas_core/doctor.ex:41", "apps/veritas_core/lib/mix/tasks/veritas.cli.ex:155", "apps/veritas_web/lib/veritas_web/graphql/schema.ex:111", "apps/veritas_web/lib/veritas_web/graphql/schema.ex:170"], "note": "docs/04:479 requires dashboard report generation. Overview offers aggregate dashboard reads; Doctor.report/1 diagnoses the installation. These existing reads are retained as evidence but do not establish report generation. No generation binding or independent generation proof is identified on any surface; the required operation is not narrowed to a read."},
+        "agent_run.status": {"classification": "missing", "sources": ["apps/veritas_web/lib/veritas_web/live/agent_console/index.ex:47", "apps/veritas_core/lib/veritas/agentic/runner.ex:67", "apps/veritas_web/lib/veritas_web/graphql/schema.ex:127"], "note": "The console keeps the just-returned answer/run_id in its socket, but has no run-id status lookup; CLI and GraphQL have no Agent-run surface. A terminal answer is not independently queryable run status."},
+        "agent_run.approve": {"classification": "missing", "sources": ["apps/veritas_web/lib/veritas_web/live/agent_console/index.ex:47", "apps/veritas_core/lib/veritas/agentic/runner.ex:183", "apps/veritas_web/lib/veritas_web/graphql/schema.ex:184"], "note": "The runner distinguishes tool refusal/gating, but no human run-approval verb, mutation or rendered control exists. A tool capability decision is not a human approval binding."},
+        "agent_run.reject": {"classification": "missing", "sources": ["apps/veritas_web/lib/veritas_web/live/agent_console/index.ex:47", "apps/veritas_core/lib/veritas/agentic/runner.ex:183", "apps/veritas_core/lib/mix/tasks/veritas.cli.ex:139"], "note": "No human run-rejection binding; a runner/tool error is not an operator rejection."},
+        "agent_run.transcript": {"classification": "missing-full-operation; partial-ui-existing-unproved", "sources": ["apps/veritas_web/lib/veritas_web/live/agent_console/index.ex:107", "apps/veritas_web/test/veritas_web/agent_console_test.exs:64", "apps/veritas_core/lib/veritas/agentic/runner.ex:130"], "note": "The console renders current run step tool/scope/outcome, not a run-id transcript retrieval or full message/tool-output transcript. Existing rendered-step coverage is acknowledged without certifying the larger operation."},
+        "discovery.trigger": {"classification": "missing", "sources": ["apps/veritas_core/lib/mix/tasks/veritas.cli.ex:139", "apps/veritas_web/lib/veritas_web/graphql/schema.ex:184", "apps/veritas_web/lib/veritas_web/router.ex:233"], "note": "No discovery-trigger dispatch, mutation or routed control was found. Provider test connection does not trigger CI discovery."},
+        "ci.observation_fetch": {"classification": "missing", "sources": ["apps/veritas_core/lib/mix/tasks/veritas.cli.ex:927", "apps/veritas_web/lib/veritas_web/graphql/schema.ex:130", "apps/veritas_web/lib/veritas_web/live/ci_live/show.ex:28"], "note": "CI show/get/list and impact read stored state and relations; none fetches an external observation. The similarly named CI attribute fields do not establish this operation."}
+      },
+      "unresolved_requirements": [
+        "Equivalence of the existing flat CI predicates to docs/06:408's CiFilter and the required shared CI/global-search grammar remains open on all surfaces.",
+        "Whether existing relation/impact traversal satisfies by-relationship query or needs the separate dependency query; remains open, not accepted here.",
+        "Adapter-list scope: the provider form loads LLM adapter IDs through AdapterRegistry.ids/0 (agent_console/providers.ex:46); that narrower picker is not promoted into the required generic/discovery Adapter-list operation.",
+        "Write-path authority remains open: docs/04:485 makes GraphQL the sole write path, while docs/06:336 shows CLI, GraphQL and LiveViews calling shared contexts. This audit changes no routing, policy or accepted decision."
+      ],
+      "note": "Missing, existing-but-unproved and unresolved are distinct. Parent verified claims were downgraded where required facets remain unproved. The old unfiltered CI query citation and the false claim that no test submits #agent-ask were corrected. Valid historical declarations and test references are retained, not re-executed or promoted by this audit; the changed CI/store baseline remains unqualified by the historical 11/11 run. No layout, scope, grant or requirement interpretation is accepted by this instrument."
+    }
+  },
+  "operations": [
+    {
+      "id": "ticket.create",
+      "name": "create",
+      "ticket_types": [
+        "incident",
+        "change",
+        "service_request",
+        "problem",
+        "vulnerability"
+      ],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": "open",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_core/lib/mix/tasks/veritas.cli.ex:159",
+          "note": "The command exists and the usage text names it, but no test runs the CLI verb."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": "openTicket",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_web/lib/veritas_web/graphql/schema.ex:185",
+          "note": "Exercised by the GraphQL tests with a real mutation document."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": "raise_ticket",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_web/lib/veritas_web/live/incident_live/index.ex:105",
+          "note": "The intake form's own event, exercised through the rendered form."
+        }
+      },
+      "domain_capability": {
+        "module": "Veritas.Core.Tickets",
+        "function": "open/4"
+      },
+      "aspects": {
+        "kind": "ticket_type",
+        "states": {
+          "incident": {
+            "cli": "implemented-unverified",
+            "graphql": "behaviorally-verified",
+            "ui": "implemented-unverified"
+          },
+          "change": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "behaviorally-verified"
+          },
+          "service_request": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "behaviorally-verified"
+          },
+          "problem": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "implemented-unverified"
+          },
+          "vulnerability": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "implemented-unverified"
+          }
+        },
+        "note": "The CLI verb takes --type and the domain accepts the five canonical types, so every type is reachable on every surface; what differs is what a test proves. The GraphQL tests open an Incident (graphql/schema_test.exs:55); the UI tests raise a Service Request (ticket_intake_test.exs:29) and a Change (:87). The UI's Problem and Incident types are reachable through the Incidents queue's tabs (ticket_queue.ex:40) and the form's own type select (incident_live/index.ex:186); the Vulnerability type has its own queue (ticket_queue.ex:61)."
+      }
+    },
+    {
+      "id": "ticket.update",
+      "name": "update",
+      "ticket_types": [
+        "incident",
+        "change",
+        "service_request",
+        "problem",
+        "vulnerability"
+      ],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": "update",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_core/lib/mix/tasks/veritas.cli.ex:161",
+          "note": "The CLI ticket-update test proves the verb changes the row and audits it."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": "updateTicket",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_web/lib/veritas_web/graphql/schema.ex:235",
+          "note": "The mutation is run by the GraphQL tests with a real mutation document: the content changes and the ticket comes back (graphql/schema_test.exs:267), a title-only update leaves the description alone (:301), a description-only update leaves the title alone (:331), and the change is recorded in the Audit Log (:361).",
+          "evidence": [
+            "apps/veritas_web/test/veritas_web/graphql/schema_test.exs:267",
+            "apps/veritas_web/test/veritas_web/graphql/schema_test.exs:301",
+            "apps/veritas_web/test/veritas_web/graphql/schema_test.exs:331",
+            "apps/veritas_web/test/veritas_web/graphql/schema_test.exs:361"
+          ]
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": "update",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_web/lib/veritas_web/live/incident_live/show.ex:124",
+          "note": "The edit form is submitted through the rendered control with the form's own payload: editing the title changes the ticket and the screen shows it (live/incident_live_test.exs:200), editing the description changes the ticket (:223), and the Audit Log records the change with the actor (:240).",
+          "evidence": [
+            "apps/veritas_web/test/veritas_web/live/incident_live_test.exs:200",
+            "apps/veritas_web/test/veritas_web/live/incident_live_test.exs:223",
+            "apps/veritas_web/test/veritas_web/live/incident_live_test.exs:240"
+          ]
+        }
+      },
+      "domain_capability": {
+        "module": "Veritas.Core.Tickets",
+        "function": "update/5"
+      },
+      "aspects": {
+        "kind": "ticket_type",
+        "states": {
+          "incident": {
+            "cli": "behaviorally-verified",
+            "graphql": "behaviorally-verified",
+            "ui": "behaviorally-verified"
+          },
+          "change": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "implemented-unverified"
+          },
+          "service_request": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "implemented-unverified"
+          },
+          "problem": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "implemented-unverified"
+          },
+          "vulnerability": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "implemented-unverified"
+          }
+        },
+        "note": "The verb and the mutation take an identifier, not a type, so every type is reachable on every surface. The tests prove the Incident (cli_ticket_update_test.exs:21, graphql/schema_test.exs:267, live/incident_live_test.exs:200); the other four are untested."
+      }
+    },
+    {
+      "id": "ticket.transition",
+      "name": "transition",
+      "ticket_types": [
+        "incident",
+        "change",
+        "service_request",
+        "problem",
+        "vulnerability"
+      ],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": "transition",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_core/lib/mix/tasks/veritas.cli.ex:160",
+          "note": "cli_transition_test.exs:53 runs the verb and asserts a successful exit and the audit actor; it does not assert the persisted target state. This Incident case is not proof for all five types or a new current-tree run receipt."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": "transitionTicket",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_web/lib/veritas_web/graphql/schema.ex:204",
+          "note": "The mutation is run by the GraphQL tests: a legal transition moves the ticket and extends the chain (graphql/schema_test.exs:123), the actor is the signed-in Principal (:158), an illegal transition is refused and writes nothing (:186), and a transition on a ticket that does not exist is refused (:220).",
+          "evidence": [
+            "apps/veritas_web/test/veritas_web/graphql/schema_test.exs:123",
+            "apps/veritas_web/test/veritas_web/graphql/schema_test.exs:158",
+            "apps/veritas_web/test/veritas_web/graphql/schema_test.exs:186",
+            "apps/veritas_web/test/veritas_web/graphql/schema_test.exs:220"
+          ]
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": "transition",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_web/lib/veritas_web/live/incident_live/show.ex:93",
+          "note": "The transition event is exercised; the click is a forged event, which is legitimate negative coverage."
+        }
+      },
+      "domain_capability": {
+        "module": "Veritas.Core.Tickets",
+        "function": "transition/4"
+      },
+      "aspects": {
+        "kind": "ticket_type",
+        "states": {
+          "incident": {
+            "cli": "behaviorally-verified",
+            "graphql": "behaviorally-verified",
+            "ui": "behaviorally-verified"
+          },
+          "change": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "implemented-unverified"
+          },
+          "service_request": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "implemented-unverified"
+          },
+          "problem": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "implemented-unverified"
+          },
+          "vulnerability": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "implemented-unverified"
+          }
+        },
+        "note": "The transition takes an identifier and a state, so every type is reachable on every surface. Existing Incident references are retained (cli_transition_test.exs:53, graphql/schema_test.exs:123, live/incident_live_test.exs:129, and :155 for the refusal). The CLI case checks exit/audit actor, not persisted target state. These references do not qualify the other four types or the current changed baseline; independent per-type proof remains required for all five."
+      }
+    },
+    {
+      "id": "ticket.comment",
+      "name": "comment",
+      "ticket_types": [
+        "incident",
+        "change",
+        "service_request",
+        "problem",
+        "vulnerability"
+      ],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no comment verb in the CLI dispatch."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no comment mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no comment event."
+        }
+      },
+      "domain_capability": null,
+      "aspects": {
+        "kind": "ticket_type",
+        "states": {
+          "incident": {
+            "cli": "missing",
+            "graphql": "missing",
+            "ui": "missing"
+          },
+          "change": {
+            "cli": "missing",
+            "graphql": "missing",
+            "ui": "missing"
+          },
+          "service_request": {
+            "cli": "missing",
+            "graphql": "missing",
+            "ui": "missing"
+          },
+          "problem": {
+            "cli": "missing",
+            "graphql": "missing",
+            "ui": "missing"
+          },
+          "vulnerability": {
+            "cli": "missing",
+            "graphql": "missing",
+            "ui": "missing"
+          }
+        },
+        "note": "Veritas.Core.Tickets has no comment function (tickets.ex carries open, transition, update and assign), the GraphQL schema has no comment mutation, and the web app declares no comment event."
+      }
+    },
+    {
+      "id": "ticket.assign",
+      "name": "assign",
+      "ticket_types": [
+        "incident",
+        "change",
+        "service_request",
+        "problem",
+        "vulnerability"
+      ],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no assign verb in the CLI dispatch."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no assign mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no assign event."
+        }
+      },
+      "domain_capability": {
+        "module": "Veritas.Core.Tickets",
+        "function": "assign/5"
+      },
+      "aspects": {
+        "kind": "ticket_type",
+        "states": {
+          "incident": {
+            "cli": "missing",
+            "graphql": "missing",
+            "ui": "missing"
+          },
+          "change": {
+            "cli": "missing",
+            "graphql": "missing",
+            "ui": "missing"
+          },
+          "service_request": {
+            "cli": "missing",
+            "graphql": "missing",
+            "ui": "missing"
+          },
+          "problem": {
+            "cli": "missing",
+            "graphql": "missing",
+            "ui": "missing"
+          },
+          "vulnerability": {
+            "cli": "missing",
+            "graphql": "missing",
+            "ui": "missing"
+          }
+        },
+        "note": "Veritas.Core.Tickets.assign/5 exists (tickets.ex:385), but no surface exposes it: there is no assign verb, no assign mutation and no assign event. The function writes the assignee string with no check that the assignee exists (tickets.ex:412)."
+      }
+    },
+    {
+      "id": "ci.create",
+      "name": "CI create",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": "ci create",
+          "status": "behaviorally-verified",
+          "location": "apps/veritas_core/lib/mix/tasks/veritas.cli.ex:1010",
+          "note": "The cross-surface test creates the CI through the command line."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": "createCi",
+          "status": "behaviorally-verified",
+          "location": "apps/veritas_web/lib/veritas_web/graphql/schema.ex:172",
+          "note": "The GraphQL actor test runs the mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": "create",
+          "status": "behaviorally-verified",
+          "location": "apps/veritas_web/lib/veritas_web/live/ci_live/index.ex",
+          "note": "The CMDB form's create event, exercised with the rendered form."
+        }
+      },
+      "domain_capability": {
+        "module": "Veritas.Core.CI",
+        "function": "create/2"
+      }
+    },
+    {
+      "id": "ci.update",
+      "name": "CI update",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no ci update subcommand."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no updateCi mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": "update",
+          "status": "behaviorally-verified",
+          "location": "apps/veritas_web/lib/veritas_web/live/ci_live/show.ex",
+          "note": "The CI edit form is submitted through the rendered control: the edit survives a reload and the page shows what the store holds (cmdb_editing_test.exs:77).",
+          "evidence": [
+            "apps/veritas_web/test/veritas_web/cmdb_editing_test.exs:77"
+          ]
+        }
+      },
+      "domain_capability": {
+        "module": "Veritas.Core.CI",
+        "function": "update/3"
+      }
+    },
+    {
+      "id": "ci.retire",
+      "name": "CI retire",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no ci retire subcommand."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no retireCi mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": "Veritas.Web.CILive.Show:update / #ci-update lifecycle_state=retired",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_web/lib/veritas_web/live/ci_live/show.ex:264",
+          "note": "The rendered edit form offers retired and update forwards lifecycle_state to CI.update/3. A dedicated retire event is not necessary to expose that state change. No independently executed retirement proof is registered."
+        }
+      },
+      "domain_capability": null
+    },
+    {
+      "id": "relationship.create",
+      "name": "relationship create",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": "ci relate",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_core/lib/mix/tasks/veritas.cli.ex:1036",
+          "note": "The verb exists; no test runs it."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no relateCi mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no relate event."
+        }
+      },
+      "domain_capability": {
+        "module": "Veritas.Core.CI",
+        "function": "relate/5"
+      }
+    },
+    {
+      "id": "relationship.delete",
+      "name": "relationship delete",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no cli verb that calls the port's unrelate."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no unrelateCi mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no unrelate event."
+        }
+      },
+      "domain_capability": {
+        "module": "Veritas.Store",
+        "function": "unrelate/4",
+        "note": "The port can unrelate; the domain exposes no CI-level operation for it."
+      }
+    },
+    {
+      "id": "ci.query",
+      "name": "CI query by attribute, type, or relationship",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": "ci list",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_core/lib/mix/tasks/veritas.cli.ex:935",
+          "note": "ci list accepts --type plus lifecycle/criticality equality predicates; these are partial attribute filtering, not established full-contract equivalence. The independent ci.query.by_type.cli case selects matching, nonmatching and empty results. Its definition and registry mapping are evidence, not a current-tree run receipt or proof of other query facets.",
+          "evidence": [
+            "apps/veritas_web/test/veritas_web/parity_proof_test.exs:46",
+            "apps/veritas_core/test/support/parity_proof_registry.ex:18"
+          ]
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": "cis",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_web/lib/veritas_web/graphql/schema.ex:130",
+          "note": "ci_surfaces_test.exs:54-81 exercises an unfiltered list after CLI creation, not by-type filtering. The separate ci.query.by_type.graphql case supplies ciType and asserts matching, nonmatching and empty results. Neither these source definitions nor the historical run qualifies the current CI/store tree or the whole query contract.",
+          "evidence": [
+            "apps/veritas_web/test/veritas_web/ci_surfaces_test.exs:54",
+            "apps/veritas_web/test/veritas_web/parity_proof_test.exs:57",
+            "apps/veritas_core/test/support/parity_proof_registry.ex:28"
+          ]
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": "GET form (type, lifecycle, criticality)",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_web/lib/veritas_web/live/ci_live/index.ex:190",
+          "note": "The rendered GET form is filtered server-side by handle_params/3 and CI.list/2, not by client-side filtering or a LiveView filter event. ci.query.by_type.ui submits the actual rendered form and checks matching, excluded, any and empty-result controls. This source evidence is not current-tree qualification or proof of other query facets.",
+          "evidence": [
+            "apps/veritas_web/test/veritas_web/parity_proof_test.exs:68",
+            "apps/veritas_core/test/support/parity_proof_registry.ex:38"
+          ]
+        }
+      },
+      "query_modes": [
+        "by_attribute",
+        "by_type",
+        "by_relationship"
+      ],
+      "domain_capability": {
+        "module": "Veritas.Core.CI",
+        "function": "list/2"
+      },
+      "aspects": {
+        "kind": "query_mode",
+        "states": {
+          "by_type": {
+            "cli": "implemented-unverified",
+            "graphql": "implemented-unverified",
+            "ui": "implemented-unverified"
+          },
+          "by_attribute": {
+            "cli": "open",
+            "graphql": "open",
+            "ui": "open"
+          },
+          "by_relationship": {
+            "cli": "open",
+            "graphql": "open",
+            "ui": "open"
+          }
+        },
+        "note": "by_type callers exist at CLI ci list --type (veritas.cli.ex:935), GraphQL cis(ciType:) (schema.ex:132), and the rendered GET form (ci_live/index.ex:190); their independent case references are recorded above. The unfiltered ci_surfaces_test.exs case does not prove filtering. by_relationship has real candidates: CLI ci show calls CI.relations/4 in both directions and CI.impact/3 (veritas.cli.ex:970-984), GraphQL impact calls CI.impact/3 (schema.ex:155,341), and CI Show loads impact/outgoing relations (ci_live/show.ex:40-50). Equivalence to the full relationship-query obligation, including docs/06:397's ciDependencies(id), remains open. Lifecycle/criticality equality is partial attribute filtering; --attr is write parsing (veritas.cli.ex:1288), not a read predicate. docs/06:408 names status, type, provider, tag, nameContains and updatedSince; the current ci_type/lifecycle_state/criticality predicates do not establish equivalent shared grammar. No scope is accepted and no source case is promoted into current-tree proof."
+      }
+    },
+    {
+      "id": "search.global",
+      "name": "global search",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no search verb."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no global search query."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no global search control."
+        }
+      },
+      "domain_capability": null
+    },
+    {
+      "id": "bulk.transition",
+      "name": "bulk transition",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no bulk verb."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no bulk transition mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no bulk control."
+        }
+      },
+      "domain_capability": null
+    },
+    {
+      "id": "bulk.assign",
+      "name": "bulk assign",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no bulk verb."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no bulk assign mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no bulk control."
+        }
+      },
+      "domain_capability": null
+    },
+    {
+      "id": "audit.query",
+      "name": "Audit Log query",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "The CLI's `audit verify` verifies the chain; it does not query the Log."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "The schema's auditVerification verifies the chain; it does not query the Log."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": "filter",
+          "status": "behaviorally-verified",
+          "location": "apps/veritas_web/lib/veritas_web/live/admin_live/audit.ex",
+          "note": "The audit screen's filter event is submitted by a test."
+        }
+      },
+      "domain_capability": {
+        "module": "Veritas.Core.Audit",
+        "function": "entries/1"
+      }
+    },
+    {
+      "id": "audit.export",
+      "name": "Audit Log export",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no export verb."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no export mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no export control."
+        }
+      },
+      "formats": [
+        "csv",
+        "jsonl"
+      ],
+      "aspects": {
+        "kind": "format",
+        "states": {
+          "csv": {"cli": "missing", "graphql": "missing", "ui": "missing"},
+          "jsonl": {"cli": "missing", "graphql": "missing", "ui": "missing"}
+        },
+        "note": "Both named formats are required on every surface. No export command, mutation or rendered control exists in the inspected dispatch, schema or LiveViews; chain verification is not an export."
+      },
+      "domain_capability": null
+    },
+    {
+      "id": "dashboard.report",
+      "name": "dashboard report generation",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "No CLI report-generation binding is identified; doctor is installation diagnostics."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "No GraphQL report-generation binding is identified in the schema."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "Overview renders live aggregate dashboard reads, not the dashboard report generation required by docs/04:479. Those reads remain acknowledged, but no generation control or independent generation proof is identified. Doctor.report/1 diagnoses the installation and is not a generation capability."
+        }
+      },
+      "domain_capability": null
+    },
+    {
+      "id": "agent_run.start",
+      "name": "Agent run start",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no agent verb in the CLI dispatch."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no startAgentRun mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": "ask",
+          "status": "implemented-unverified",
+          "location": "apps/veritas_web/lib/veritas_web/live/agent_console/index.ex",
+          "note": "The console's #agent-ask rendered form submits ask and starts Runner.ask/3. agent_console_test.exs:64-111 actually submits that form and checks the answer/steps, so the old assertion that no test submits it was wrong. This is candidate LiveView/scripted-adapter evidence, not a newly executed independent parity proof.",
+          "evidence": ["apps/veritas_web/test/veritas_web/agent_console_test.exs:64"]
+        }
+      },
+      "domain_capability": {
+        "module": "Veritas.Agentic.Runner",
+        "function": "ask/3"
+      }
+    },
+    {
+      "id": "agent_run.status",
+      "name": "Agent run status",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no agent verb in the CLI dispatch."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no agent run status query."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "The console renders runs; no event answers for one."
+        }
+      },
+      "domain_capability": null
+    },
+    {
+      "id": "agent_run.approve",
+      "name": "Agent run approve",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no agent verb in the CLI dispatch."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no approve mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no approve event."
+        }
+      },
+      "domain_capability": null
+    },
+    {
+      "id": "agent_run.reject",
+      "name": "Agent run reject",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no agent verb in the CLI dispatch."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no reject mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no reject event."
+        }
+      },
+      "domain_capability": null
+    },
+    {
+      "id": "agent_run.transcript",
+      "name": "Agent run transcript",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no agent verb in the CLI dispatch."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no transcript query."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no transcript control."
+        }
+      },
+      "domain_capability": null
+    },
+    {
+      "id": "discovery.trigger",
+      "name": "discovery trigger",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no discovery verb."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no discovery mutation."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no discovery control."
+        }
+      },
+      "domain_capability": null
+    },
+    {
+      "id": "adapter.list",
+      "name": "Adapter list",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no adapter verb."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no adapter query."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "The Providers screen has an LLM-adapter picker loaded by AdapterRegistry.ids/0 (agent_console/providers.ex:46). Its narrower scope is already acknowledged, but equivalence to the required generic/discovery Adapter-list operation remains open; no binding is promoted here."
+        }
+      },
+      "domain_capability": {
+        "module": "Veritas.Agentic.LLM.AdapterRegistry",
+        "function": "ids/0",
+        "note": "This enumerates LLM adapter IDs, not an accepted implementation of the unresolved required Adapter-list scope."
+      }
+    },
+    {
+      "id": "ci.observation_fetch",
+      "name": "CI observation fetch",
+      "ticket_types": [],
+      "surfaces": [
+        "cli",
+        "graphql",
+        "ui"
+      ],
+      "bindings": {
+        "cli": {
+          "kind": "cli",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no observation verb."
+        },
+        "graphql": {
+          "kind": "graphql",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no observation query."
+        },
+        "ui": {
+          "kind": "ui",
+          "identifier": null,
+          "status": "missing",
+          "note": "There is no observation control."
+        }
+      },
+      "domain_capability": null
+    }
+  ]
+}

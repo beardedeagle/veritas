@@ -1,0 +1,59 @@
+#!/bin/sh
+# bin/veritas-dev — the operator's entry point in a **checkout**.
+#
+# The commands themselves are Mix tasks (`mix veritas.cli`, `mix veritas.bench`,
+# `mix veritas.store.spec`, `mix veritas.store.install`), and Mix finds an
+# umbrella's tasks from the repository root, so `mix veritas.cli …` already
+# works in a checkout.
+#
+# This wrapper is the **stable path**. It works from any directory, it does
+# not depend on where the operator is standing, and it is the one name to put
+# in a runbook or a script. Every argument is passed straight through, and
+# the exit code is the task's.
+#
+#     bin/veritas-dev doctor
+#     bin/veritas-dev ci list --workspace default
+#     bin/veritas-dev bench
+#
+# A first argument of `cli`, `bench`, `store-install` or `store-spec` names the
+# task; anything else is passed to the command line, which is the operator's
+# usual way in.
+#
+# The name says **dev** on purpose. `bin/veritas` is the release's own start
+# script — `start`, `stop`, `rpc`, `eval`, `remote` — and one name must mean
+# one thing (`docs/10` §Release Artifact Layout). The Windows equivalent of
+# this script is `bin/veritas-dev.bat`.
+
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$root"
+
+if ! command -v mix >/dev/null 2>&1; then
+  echo "bin/veritas-dev: mix is not on PATH." >&2
+  echo "bin/veritas-dev: install the pinned Elixir and OTP — see .tool-versions." >&2
+  exit 127
+fi
+
+task=veritas.cli
+
+case "${1:-}" in
+  cli)
+    shift
+    task=veritas.cli
+    ;;
+  bench)
+    shift
+    task=veritas.bench
+    ;;
+  store-install)
+    shift
+    task=veritas.store.install
+    ;;
+  store-spec)
+    shift
+    task=veritas.store.spec
+    ;;
+esac
+
+exec mix "$task" "$@"

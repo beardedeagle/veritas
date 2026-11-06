@@ -1,0 +1,62 @@
+#!/bin/sh
+# The host's example Plugin launcher.
+#
+# A Plugin is a separate OS process, so it needs something to be started
+# with. A real Plugin ships its own launcher — a shell script, a binary, a
+# container entry point — and this one is no different: the host resolves
+# the command the manifest names and runs it.
+#
+# The Plugin process is started with an **empty environment**: the host
+# builds the environment a Plugin gets, and does not hand down the host's
+# own. That is why the Elixir runtime is named on the command line here
+# rather than found on PATH — there is no PATH to find it on, and that is
+# the point.
+#
+# Usage (the host builds this command line):
+#
+#     veritas-example --elixir <path> --erl <path> \
+#                     --veritas-socket <path> --veritas-manifest <path>
+
+set -eu
+
+PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+elixir_bin=""
+erl_bin=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --elixir)
+      elixir_bin="${2:-}"
+      shift 2 || shift
+      ;;
+    --erl)
+      erl_bin="${2:-}"
+      shift 2 || shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [ -z "$elixir_bin" ]; then
+  elixir_bin=$(command -v elixir 2>/dev/null || true)
+fi
+
+if [ -z "$elixir_bin" ]; then
+  echo "veritas-example: no Elixir runtime was given (--elixir)" >&2
+  exit 127
+fi
+
+if [ -n "$erl_bin" ]; then
+  PATH="$(dirname "$erl_bin"):$(dirname "$elixir_bin"):$PATH"
+else
+  PATH="$(dirname "$elixir_bin"):$PATH"
+fi
+export PATH
+
+exec "$elixir_bin" "$here/veritas_example.exs" "$@"

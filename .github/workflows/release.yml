@@ -1,0 +1,332 @@
+# Veritas release pipeline.
+#
+# The build is the same build the CI pipeline runs: the shared composite
+# action `.github/actions/build-release` does the work, so the artifact a
+# pull request proves and the artifact a tag publishes come from the same
+# steps. Nothing here rebuilds anything.
+#
+# What this pipeline does that CI does not: it signs the artifacts, writes
+# an SBOM, writes the channel manifest, and opens a DRAFT release for a
+# human to publish.
+#
+# The draft is deliberate. `docs/10` and `docs/11` fix the artifact matrix,
+# the signing, the SBOM and the channel model, but they do not say where a
+# release is published or where the channel manifests live. A draft release
+# proposes the artifact set to the people who own those decisions instead of
+# answering them here.
+#
+# What is NOT produced yet, and is not this pipeline's to invent: the
+# `.deb`, `.rpm`, `.apk`, Nix derivation, Homebrew formula, Scoop manifest,
+# Chocolatey package, Windows MSI, the two container images and the Helm
+# chart that `docs/10` lists. The `bin/veritas-dev` wrapper, the service files
+# and the vendored datastore that `docs/10` puts inside the artifact are
+# product work that is not in the tree yet. What is published here is the
+# release as it stands.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: The channel to publish under.
+        type: choice
+        options: [nightly, beta, stable]
+        default: nightly
+
+# The permissions are per job, and not for the workflow.
+#
+# A workflow-level grant gives every job — and every action inside it — the
+# whole set. That is the blast radius that matters here: a third-party
+# action, pinned to a tag that can be moved, running in a job that can
+# publish a release and mint an OIDC token. Each job below is given only
+# what it uses:
+#
+#   toolchain  reads the repository, and nothing else
+#   build      reads the repository and uploads artefacts
+#   publish    publishes the release, mints the OIDC token keyless signing
+#              needs, and writes the build provenance attestation
+#
+# `contents: read` is stated where the repository is checked out rather than
+# relied upon: on a public repository the token is read-only by default, and
+# a permission that is not written down is a permission that is not
+# reviewed.
+
+env:
+  MIX_ENV: prod
+  SURREAL_IMAGE: surrealdb/surrealdb:v3.3.4@sha256:649a60a3b9c0177d9923c938e1c2563e48cde2a9d06ac2c0519714be719b02af
+
+jobs:
+  toolchain:
+    name: Toolchain
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      elixir: ${{ steps.pin.outputs.elixir }}
+      otp: ${{ steps.pin.outputs.otp }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read the pinned toolchain
+        id: pin
+        run: |
+          set -euo pipefail
+          elixir_version="$(awk '$1 == "elixir" { print $2 }' .tool-versions)"
+          otp_version="$(awk '$1 == "erlang" { print $2 }' .tool-versions)"
+          if [ -z "$elixir_version" ] || [ -z "$otp_version" ]; then
+            echo "::error::.tool-versions must pin both elixir and erlang"
+            exit 1
+          fi
+          echo "elixir=$elixir_version" >> "$GITHUB_OUTPUT"
+          echo "otp=$otp_version" >> "$GITHUB_OUTPUT"
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ steps.pin.outputs.elixir }}
+          otp-version: ${{ steps.pin.outputs.otp }}
+      - name: Fetch the dependencies
+        run: mix deps.get
+      - name: Restore the compiled dependencies
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: >-
+            build-${{ runner.os }}-${{ env.MIX_ENV }}-${{
+            hashFiles('mix.lock') }}-elixir-${{
+            needs.toolchain.outputs.elixir }}-otp-${{ needs.toolchain.outputs.otp }}
+      - name: Compile the application the check task lives in
+        # The check is a Mix task, and Mix finds a task only in a compiled
+        # application. One application is enough: the task lives in
+        # veritas_core.
+        run: mix do --app veritas_core cmd mix compile
+      - name: Check the toolchain against the pin
+        run: mix veritas.toolchain
+
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    needs: toolchain
+    permissions:
+      # The repository is read, and the artefacts are uploaded. Uploading an
+      # artefact uses the runner's own token, not this one, so there is
+      # nothing to write here.
+      contents: read
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-24.04
+          - target: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - target: macos-arm64
+            runner: macos-15
+          - target: macos-x86_64
+            runner: macos-15-intel
+          - target: windows-x86_64
+            runner: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          # The same pin the CI pipeline reads, from the same file.
+          elixir-version: ${{ needs.toolchain.outputs.elixir }}
+          otp-version: ${{ needs.toolchain.outputs.otp }}
+      - name: Build and package the release
+        uses: ./.github/actions/build-release
+        with:
+          target: ${{ matrix.target }}
+      - name: Upload the artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: veritas-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Sign, describe and stage
+    needs: [toolchain, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      # `gh release create` publishes the release, and it is the only job
+      # that does.
+      contents: write
+      # cosign's keyless signing mints an OIDC token for the signature.
+      id-token: write
+      # The build provenance attestation is written to the attestations API.
+      attestations: write
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: The third-party actions are pinned
+        # Before anything else runs: a release is not published by a workflow
+        # whose third-party actions are on tags that can move. The check is
+        # the same one CI runs.
+        run: bash .github/scripts/check-action-pins.sh
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ needs.toolchain.outputs.elixir }}
+          otp-version: ${{ needs.toolchain.outputs.otp }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Install the advisory scanner
+        # The same pinned scanner the CI sweep uses.
+        run: bash .github/scripts/install-osv-scanner.sh
+
+      - name: The dependency advisory gate
+        # A release is never published with a known advisory in the locked
+        # dependency set. This is the same gate the CI pipeline runs — the
+        # Hex database, the OSV database, and the databases for the
+        # dependencies that are not on Hex — and the same dated exceptions.
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/security_gate.py hex
+          python3 .github/scripts/security_gate.py osv
+          python3 .github/scripts/security_gate.py git-deps
+
+      - name: Read the channel
+        id: channel
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            channel="${{ inputs.channel }}"
+          elif [[ "${GITHUB_REF_NAME}" == *-rc.* ]] || [[ "${GITHUB_REF_NAME}" == *-beta* ]]; then
+            channel="beta"
+          else
+            channel="stable"
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Publishing under the $channel channel"
+
+      - name: Generate the SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          artifact-name: sbom.cyclonedx.json
+
+      - name: Generate the SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist
+          format: spdx-json
+          output-file: sbom.spdx.json
+          artifact-name: sbom.spdx.json
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+
+      - name: Install the secret scanner
+        run: bash .github/scripts/install-gitleaks.sh
+      - name: Scan the release artefact for secrets
+        # The artefact is scanned as well as the history: a release carries
+        # whatever its build carried, and a binary that ships a key ships the
+        # key whether or not the source ever held it.
+        run: mix veritas.secrets artefact
+      - name: Scan the release artefact
+        run: |
+          set -euo pipefail
+          # The second tool `docs/09` §6.5 names. It does not read mix.lock
+          # (it does not parse the Elixir lockfile at all), so it is pointed
+          # at the artefact itself: what is shipped, not what is declared.
+          version="v0.76.1"
+          base="https://github.com/aquasecurity/trivy/releases/download/${version}"
+          curl -sSfL -o trivy.tar.gz "$base/trivy_${version#v}_Linux-64bit.tar.gz"
+          curl -sSfL -o trivy_SHA256SUMS "$base/trivy_${version#v}_checksums.txt"
+          grep " trivy_${version#v}_Linux-64bit.tar.gz\$" trivy_SHA256SUMS | sha256sum -c -
+          tar -xzf trivy.tar.gz trivy
+          sudo mv trivy /usr/local/bin/
+          mkdir -p artefact
+          tar -xzf dist/veritas-*-linux-x86_64.tar.gz -C artefact
+          trivy fs --scanners vuln --severity CRITICAL,HIGH --exit-code 1 artefact/
+
+      - name: Sign the artifacts
+        run: |
+          set -euo pipefail
+          # Keyless: the runner's OIDC token is the key, so no signing
+          # credential is stored anywhere. The bundle verifies offline
+          # against the transparency log's inclusion proof.
+          for file in dist/*.tar.gz dist/SHA256SUMS-*.txt; do
+            [ -e "$file" ] || continue
+            cosign sign-blob --yes --bundle "${file}.bundle" "$file"
+          done
+
+      - name: Write the channel manifest
+        id: manifest
+        run: |
+          set -euo pipefail
+          mkdir -p dist/channels
+          version="$(awk -F'"' '/^[[:space:]]*version: "/ { print $2; exit }' mix.exs)"
+          sha="$(git rev-parse HEAD)"
+          elixir_pin="$(awk '$1 == "elixir" { print $2 }' .tool-versions)"
+          otp_pin="$(awk '$1 == "erlang" { print $2 }' .tool-versions)"
+
+          {
+            printf '{\n'
+            printf '  "version": "%s",\n' "$version"
+            printf '  "git_sha": "%s",\n' "$sha"
+            printf '  "channel": "%s",\n' "${{ steps.channel.outputs.channel }}"
+            printf '  "toolchain": { "elixir": "%s", "erlang": "%s" },\n' "$elixir_pin" "$otp_pin"
+            printf '  "artifacts": {\n'
+            first=1
+            for file in dist/*.tar.gz; do
+              digest="$(sha256sum "$file" | cut -d' ' -f1)"
+              [ $first -eq 1 ] || printf ',\n'
+              first=0
+              printf '    "%s": "sha256:%s"' "$(basename "$file")" "$digest"
+            done
+            printf '\n  }\n}\n'
+          } > "dist/channels/${{ steps.channel.outputs.channel }}.json"
+
+          cosign sign-blob --yes --bundle "dist/channels/${{ steps.channel.outputs.channel }}.json.bundle" \
+            "dist/channels/${{ steps.channel.outputs.channel }}.json"
+
+      - name: Collect the SBOMs with the artifacts
+        run: |
+          set -euo pipefail
+          # The SBOM action writes its output in the working directory. It is
+          # part of the release — every release carries one — so it travels
+          # with the artifacts the release is assembled from.
+          for file in sbom.cdx.json sbom.spdx.json; do
+            if [ -f "$file" ]; then
+              mv "$file" dist/
+            fi
+          done
+
+      - name: Stage the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/channels
+          # The files, not the directories. `dist/*` expands to the channel
+          # directory as well, and `gh release create` cannot attach a
+          # directory — it fails on the whole publication. The channel
+          # manifest and its signature live inside that directory, so the
+          # list is built with `find`, which finds the files.
+          mapfile -t assets < <(find dist -type f | LC_ALL=C sort)
+
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "there are no artifacts to publish" >&2
+            exit 1
+          fi
+
+          echo "publishing ${#assets[@]} file(s):"
+          printf '  %s\n' "${assets[@]}"
+
+          gh release create "$TAG" \
+            --draft \
+            --title "Veritas $TAG" \
+            --notes "Channel: ${{ steps.channel.outputs.channel }}. Draft: the artifact set is proposed here and published by a human." \
+            "${assets[@]}"
+
+      - name: Attest the build
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.tar.gz

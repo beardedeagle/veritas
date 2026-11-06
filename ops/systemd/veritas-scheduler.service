@@ -1,0 +1,50 @@
+# The scheduler: a Node that runs the scheduler application and nothing
+# else. It joins the cluster, so it is a Node (BEAM) with a cookie — it is
+# not a thread of the server.
+
+[Unit]
+Description=Veritas Scheduler
+Documentation=file:///opt/veritas/ops/RUNBOOK.md
+After=network-online.target time-sync.target veritas.service
+Wants=network-online.target
+Requires=time-sync.target
+ConditionPathExists=/etc/veritas/veritas.conf
+
+[Service]
+Type=notify
+User=veritas
+Group=veritas
+Environment=HOME=/var/lib/veritas
+Environment=VERITAS_ROLE=scheduler
+EnvironmentFile=-/etc/veritas/veritas.env
+WorkingDirectory=/var/lib/veritas
+ExecStart=/opt/veritas/bin/veritas start
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=180s
+TimeoutStopSec=60s
+KillSignal=SIGTERM
+KillMode=mixed
+OOMPolicy=stop
+MemoryHigh=1G
+MemoryMax=1500M
+MemorySwapMax=0
+TasksMax=16384
+LimitNOFILE=65536
+LimitCORE=0
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/var/lib/veritas /var/log/veritas
+CapabilityBoundingSet=
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=veritas-scheduler
+
+[Install]
+WantedBy=multi-user.target

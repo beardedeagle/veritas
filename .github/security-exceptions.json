@@ -1,0 +1,14 @@
+{
+  "_schema": {
+    "exceptions": [
+      {
+        "id": "The advisory identifier, in any of its forms: the EEF-CVE id, the CVE id or the GHSA id. The gate matches all three.",
+        "package": "The package the advisory is against, as the lockfile names it.",
+        "reason": "Why the advisory is accepted, in one or two sentences. This is the audit trail.",
+        "accepted_by": "Who accepted it. A person, not a team alias.",
+        "expires_on": "The date the exception stops being honoured, as YYYY-MM-DD. An expired exception refuses the build: the advisory has to be fixed, or the exception has to be renewed with a new reason."
+      }
+    ]
+  },
+  "exceptions": []
+}

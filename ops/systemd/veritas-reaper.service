@@ -1,0 +1,19 @@
+# The Veritas process reaper on Linux.
+#
+# The same Mix task macOS runs: one implementation, in Elixir, over the facts
+# a platform adapter gathers (`docs/12` §Process Hygiene). The timer below
+# runs it every five minutes.
+[Unit]
+Description=Veritas process reaper
+Documentation=file:///opt/veritas/ops/RUNBOOK.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=/var/lib/veritas
+Environment=PATH=/home/veritas/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+# The ports this host's live instances serve. A process holding one of these
+# is never stopped, whatever else is true of it. The operator's list.
+Environment=VERITAS_KEEP_PORTS=4000,8010
+WorkingDirectory=/opt/veritas
+ExecStart=/home/veritas/.local/share/mise/shims/mix veritas.reap --go

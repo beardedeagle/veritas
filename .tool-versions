@@ -1,0 +1,13 @@
+# The toolchain, pinned in one place.
+#
+# Every other place that names a version reads it from here: the CI
+# workflows parse this file to install the toolchain, and the check task
+# (`mix veritas.toolchain`) asserts that what is running is what this file
+# says.
+#
+# Elixir is pinned exactly. Erlang is pinned to its release line: the
+# security fixes land on the newest patch of the line, so a patch-pinned
+# Erlang would age out of the security window the moment a new patch ships.
+# The CI log records the exact patch that was installed.
+elixir 1.20.4
+erlang 29

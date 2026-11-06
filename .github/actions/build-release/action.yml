@@ -1,0 +1,60 @@
+name: Build the release
+description: >
+  Builds the mix release for the runner's platform and packages it with a
+  checksum. Used by both the CI pipeline and the release pipeline, so the
+  artifact a pull request proves and the artifact a release publishes are
+  produced by the same steps.
+
+inputs:
+  target:
+    description: The target name, e.g. linux-x86_64.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch the production dependencies
+      shell: bash
+      run: mix deps.get --only prod
+
+    - name: Compile the product
+      shell: bash
+      env:
+        MIX_ENV: prod
+      run: mix compile --warnings-as-errors
+
+    - name: Install the datastore
+      shell: bash
+      env:
+        MIX_ENV: prod
+      # The release bundles the datastore's binary, and the binary is
+      # fetched, pinned and verified by the task — never taken from
+      # whatever the machine happens to have. A clean checkout has no
+      # `vendor/surreal` at all: it is build output and is not committed,
+      # so without this step the release cannot be assembled.
+      run: mix veritas.store.install
+
+    - name: Build the assets
+      shell: bash
+      env:
+        MIX_ENV: prod
+      # The CSS, the JavaScript and the static manifest are build output and
+      # are not in the repository, and the release's layout needs them. They
+      # are built in the production environment, because that is the build
+      # the release is assembled from.
+      run: |
+        ( cd apps/veritas_web && mix assets.setup && mix assets.deploy )
+
+    - name: Build the release
+      shell: bash
+      env:
+        MIX_ENV: prod
+      run: mix release --overwrite
+
+    - name: Package the release
+      shell: bash
+      # `bash` rather than the path: the script is executable in the
+      # repository, and saying so explicitly means a checkout whose mode did
+      # not survive the transfer still packages the release instead of
+      # failing on every platform.
+      run: bash .github/scripts/package-release.sh "${{ inputs.target }}"
