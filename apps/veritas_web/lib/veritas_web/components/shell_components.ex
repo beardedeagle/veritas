@@ -73,24 +73,31 @@ defmodule Veritas.Web.ShellComponents do
   def rail(assigns) do
     ~H"""
     <nav class="v-rail" id="veritas-rail" aria-label="Primary">
-      <a href="/" class="flex items-center gap-2.5 px-2 py-3" aria-label="Veritas, overview">
-        <img src="/images/veritas-icon.svg" alt="" width="28" height="28" class="rounded-[7px]" />
-        <span class="text-[15px] font-semibold tracking-tight">Veritas</span>
+      <a href="/" class="v-rail-brand" aria-label="Veritas, overview">
+        <img
+          src="/images/veritas-icon.svg"
+          alt=""
+          width="28"
+          height="28"
+          class="shrink-0 rounded-[7px]"
+        />
+        <span class="v-rail-label text-[15px] font-semibold tracking-tight">Veritas</span>
       </a>
 
-      <ul class="flex flex-col gap-0.5">
+      <ul id="veritas-rail-links" class="v-rail-links flex flex-col gap-0.5">
         <li :for={section <- @sections}>
           <a
             href={section.path}
             class="v-rail-link"
             aria-current={section.current && "page"}
-            title={section.hint}
+            aria-label={section.label}
+            title={"#{section.label}: #{section.hint}"}
           >
-            <span class="text-base-content/60"><.icon name={section.icon} class="size-4" /></span>
-            <span class="flex-1 truncate">{section.label}</span>
+            <span class="shrink-0 text-base-content/60"><.icon name={section.icon} class="size-4" /></span>
+            <span class="v-rail-label flex-1 truncate">{section.label}</span>
             <span
               :if={section.status == :planned}
-              class="rounded border border-base-300 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-base-content/45"
+              class="v-rail-label rounded border border-base-300 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-base-content/45"
             >
               Soon
             </span>
@@ -98,9 +105,23 @@ defmodule Veritas.Web.ShellComponents do
         </li>
       </ul>
 
-      <div class="mt-auto px-2 pt-4 text-[11px] leading-4 text-base-content/40">
-        <p>Self-hosted. No account. No phone home.</p>
-        <p class="mt-1 font-mono">Apache-2.0</p>
+      <div class="mt-auto shrink-0 pt-4">
+        <div class="v-rail-label mb-3 px-2 text-[11px] leading-4 text-base-content/40">
+          <p>Self-hosted. No account. No phone home.</p>
+          <p class="mt-1 font-mono">Apache-2.0</p>
+        </div>
+        <button
+          id="veritas-rail-toggle"
+          type="button"
+          class="v-rail-toggle v-rail-link"
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar"
+          aria-expanded="true"
+          aria-controls="veritas-rail-links"
+        >
+          <.icon name="hero-chevron-double-left" class="v-rail-toggle-icon size-4 shrink-0" />
+          <span class="v-rail-label">Collapse sidebar</span>
+        </button>
       </div>
     </nav>
     """
@@ -188,28 +209,32 @@ defmodule Veritas.Web.ShellComponents do
   """
   def command_palette(assigns) do
     ~H"""
-    <details class="dropdown relative min-w-0 flex-1 sm:max-w-xl" id="v-command-palette">
-      <summary
-        class="flex h-8 cursor-pointer list-none items-center gap-2 rounded-md border border-base-300 bg-base-100 px-2.5 text-sm text-base-content/55 hover:border-base-content/25 [&::-webkit-details-marker]:hidden"
-        aria-label="Search routes and commands"
-      >
-        <.icon name="hero-magnifying-glass" class="size-4" />
-        <span class="flex-1 truncate">Search routes and commands</span>
-        <kbd class="rounded border border-base-300 px-1.5 py-px font-mono text-[10px] text-base-content/55">
-          ⌘K
-        </kbd>
-      </summary>
-
-      <div class="dropdown-content z-50 mt-1 w-full min-w-[26rem] rounded-md border border-base-300 bg-base-200 p-2 shadow-xl">
-        <label for="v-command-input" class="sr-only">Filter routes and commands</label>
+    <div class="relative min-w-0 flex-1 sm:max-w-xl" id="v-command-palette" role="search">
+      <label class="flex h-8 items-center gap-2 rounded-md border border-base-300 bg-base-100 px-2.5 text-sm text-base-content/55 focus-within:border-primary">
+        <.icon name="hero-magnifying-glass" class="size-4 shrink-0" />
+        <span class="sr-only">Search routes and commands</span>
         <input
           id="v-command-input"
           type="search"
           autocomplete="off"
-          placeholder="Type a route or a command…"
-          class="input input-sm w-full border-base-300 bg-base-100"
+          placeholder="Search routes and commands"
+          aria-controls="v-command-results"
+          aria-expanded="false"
+          class="min-w-0 flex-1 bg-transparent text-base-content placeholder:text-base-content/55 focus:outline-none"
         />
+        <kbd
+          aria-hidden="true"
+          class="rounded border border-base-300 px-1.5 py-px font-mono text-[10px] text-base-content/55"
+        >
+          ⌘K
+        </kbd>
+      </label>
 
+      <div
+        id="v-command-results"
+        hidden
+        class="absolute left-0 top-full z-50 mt-1 max-h-[calc(100dvh-4rem)] w-full overflow-y-auto rounded-md border border-base-300 bg-base-200 p-2 shadow-xl"
+      >
         <p class="px-1 pb-1 pt-2 text-[11px] uppercase tracking-wide text-base-content/45">Go to</p>
         <ul class="flex flex-col">
           <li data-command="overview dashboard home">
@@ -356,10 +381,10 @@ defmodule Veritas.Web.ShellComponents do
         </ul>
 
         <p class="mt-2 border-t border-base-300 px-1 pt-2 text-[11px] leading-4 text-base-content/45">
-          Searching Incidents, Changes and Configuration Items lands with the CMDB work.
+          Search covers pages and commands.
         </p>
       </div>
-    </details>
+    </div>
     """
   end
 

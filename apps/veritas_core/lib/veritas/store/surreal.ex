@@ -838,444 +838,144 @@ defmodule Veritas.Store.Surreal do
   # ── migration ─────────────────────────────────────────────────────────────
 
   @doc """
-  Brings a Workspace to the current schema.
+  Applies the targeted Incident v5 → v6 migration, or bootstraps an empty database.
 
-  Idempotent: every `DEFINE` uses `OVERWRITE`, and the seed rows are
-  `UPSERT`s, so running the migrator against a migrated Workspace is a no-op.
-
-  The migration runs in three phases, because a column's type cannot be
-  changed under the rows that hold the old shape:
-
-    1. **widen** — a column whose type changed accepts the old value and the
-       new one, and a column the schema added is created permissive;
-    2. **reconcile** — every row is rewritten against the widened schema: its
-       references are converted, the fields it lacks are filled, and the
-       fields the schema no longer declares are removed. The Audit Log's
-       chain is established here, because a legacy row that carries no hash
-       has to join the chain before the chain's columns are tightened;
-    3. **tighten** — the corpus's schema is applied exactly.
+  Existing rows, unknown declarations and workflow snapshots are preserved.
+  Unknown schema versions and populated unversioned databases are refused.
+  Run with Workspace writers quiesced. Ordinary repeats verify rather than
+  reseed; the host's explicit audit re-sign intent is still honored on v6.
   """
   @spec migrate(Store.workspace()) :: :ok | {:error, Error.t()}
   def migrate(workspace) do
-    with {:ok, workspace} <- ensure_namespace(workspace),
-         :ok <- widen_changed_fields(workspace),
-         :ok <- reconcile_rows(workspace),
-         {:ok, chain} <- establish_chain(workspace),
-         :ok <- advance_counters(workspace),
-         {:ok, _rows} <- request(workspace, join_statements(Schema.statements())),
-         :ok <- prune_dropped_fields(workspace),
-         {:ok, _rows} <- request(workspace, join_statements(relation_kind_statements())),
-         {:ok, _rows} <- request(workspace, join_statements(Schema.seed_statements(workspace))),
-         {:ok, _rows} <- request(workspace, Schema.version_statement()),
-         :ok <- permit_unhashed_rows(workspace, chain) do
-      case chain do
-        :refused ->
-          # The chain was left as it was found, so the historical signatures
-          # were not replaced. The migration did its work, and saying `:ok`
-          # would report an adoption that did not happen.
-          {:error,
-           Error.new(
-             :internal,
-             "the audit chain of workspace #{inspect(workspace)} was refused; the historical signatures were not replaced",
-             details: %{workspace: workspace}
-           )}
+    with {:ok, workspace} <- ensure_migration_namespace(workspace) do
+      # Relation-kind seeds already define their edge tables and endpoint indexes.
+      # Emit each definition once within the atomic bootstrap transaction.
+      bootstrap = Schema.statements() ++ Schema.seed_statements(workspace)
 
-        _established ->
-          :ok
-      end
-    else
-      {:error, reason} ->
-        # A migration that fails is a deployment fault, and it is quiet
-        # unless it says so: the caller usually ignores the result, and the
-        # symptom appears much later as missing tables.
-        Logger.error(
-          "[veritas.store] the migration of workspace #{inspect(workspace)} failed: " <>
-            (Error.message(reason) || inspect(reason))
-        )
-
-        {:error, reason}
+      Veritas.Store.Surreal.IncidentMigration.run(
+        &request(workspace, &1),
+        bootstrap,
+        &migration_audit(workspace, &1),
+        resign?: Process.get(:veritas_chain_resign) == true
+      )
     end
   end
 
-  # A row the chain could not be established for keeps its column permissive:
-  # the corpus's `hash` is a required field, and a column that requires a
-  # value the row does not have refuses every write to that row. The gap is
-  # visible in the schema and in the Audit Log's own verification, which is
-  # where it belongs.
-  defp permit_unhashed_rows(workspace, :refused) do
-    apply_statements(workspace, [
-      "DEFINE FIELD OVERWRITE hash ON audit_event TYPE string | NONE DEFAULT NONE;"
-    ])
-  end
+  defp ensure_migration_namespace(workspace) do
+    case id_or_nil(workspace) do
+      nil ->
+        {:error, Error.new(:invalid_request, "a workspace name may contain only letters, digits and underscore")}
 
-  defp permit_unhashed_rows(_workspace, _chain), do: :ok
-
-  # Every row that carries a sequence counts against the counter that hands
-  # out the next one, and a counter that lags behind the rows hands out a
-  # sequence that is already taken.
-  #
-  # The legacy counters do lag: they were allocated before the rows the
-  # migration adopts, and a store whose counter is behind its rows refuses
-  # the next write with "Database index `outbox_workspace` already contains
-  # [workspace, 1]".
-  defp advance_counters(workspace) do
-    counters = [
-      {"audit_event", {:audit, workspace}},
-      {"event_outbox", "outbox"},
-      {"ticket", "ticket"}
-    ]
-
-    statements =
-      Enum.flat_map(counters, fn {table, key} ->
-        case request(workspace, "SELECT VALUE sequence FROM #{table}") do
-          {:ok, sequences} ->
-            case Enum.reject(List.wrap(sequences), &is_nil/1) do
-              [] ->
-                []
-
-              values ->
-                [
-                  "UPSERT #{sequence_table()}:#{sequence_id(workspace, key)} SET next_value = #{Enum.max(values)}"
-                ]
+      workspace ->
+        with {:ok, [%{"namespaces" => namespaces}]} when is_map(namespaces) <-
+               request_root("INFO FOR ROOT;") do
+          if Map.has_key?(namespaces, workspace) do
+            with {:ok, [%{"databases" => databases}]} when is_map(databases) <-
+                   request_in_namespace("INFO FOR NS;", workspace) do
+              if Map.has_key?(databases, workspace),
+                do: {:ok, workspace},
+                else: ensure_namespace(workspace)
+            else
+              {:error, _} = error -> error
+              _ -> {:error, Error.new(:protocol, "the namespace inventory was malformed")}
             end
-
-          _other ->
-            []
+          else
+            ensure_namespace(workspace)
+          end
+        else
+          {:error, _} = error -> error
+          _ -> {:error, Error.new(:protocol, "the namespace inventory was malformed")}
         end
-      end)
-
-    apply_statements(workspace, statements)
-  end
-
-  # The fields the schema no longer declares are removed from the store's
-  # tables, once the rows no longer carry them. The corpus is the schema of
-  # record (`docs/07`), and a column the corpus dropped is not part of it.
-  #
-  # The values are gone before this: the reconciliation unset them, and a
-  # field whose definition outlives its value is a column the store still
-  # maintains for nothing.
-  defp prune_dropped_fields(workspace) do
-    statements =
-      Enum.flat_map(Schema.tables(), fn table ->
-        name = table.name
-        declared = Schema.declared_fields()[name] || []
-
-        case request(workspace, "INFO FOR TABLE #{name}") do
-          {:ok, [info | _]} ->
-            info
-            |> Map.get("fields", %{})
-            |> Map.keys()
-            |> Enum.reject(fn field ->
-              field in declared or field == "id" or String.contains?(field, ".")
-            end)
-            |> Enum.sort()
-            |> Enum.map(fn field -> "REMOVE FIELD #{field} ON #{name};" end)
-
-          _other ->
-            []
-        end
-      end)
-
-    apply_statements(workspace, statements)
-  end
-
-  # The edge table of every registered relation kind. The kinds are data, and
-  # the edge table is the engine's shape for them.
-  defp relation_kind_statements do
-    Enum.flat_map(Schema.relation_kinds(), fn kind ->
-      [edge_table_definition(kind)]
-    end)
-  end
-
-  # The row backfill. A row written under an earlier schema does not have the
-  # fields this one declares, and the values it has may be typed differently —
-  # a reference was a string, and is now a record. A row is therefore
-  # rewritten, field by field, against the current schema: the fields it
-  # keeps are re-stated with the types the schema now wants, and the fields it
-  # lacks take their defaults.
-  #
-  # This is part of the migration rather than an afterthought. Without it, the
-  # first write to a migrated row fails on the coercion of a field the
-  # domain never wrote.
-  # A field whose type changed cannot be tightened while the old values are
-  # still in the rows. The store refuses a write whose value does not fit the
-  # column, and the *old* value does not fit the *new* column — so the field
-  # is first widened to accept both shapes, the rows are converted, and only
-  # then is the field tightened to the type the corpus declares.
-  #
-  # Without this, a store that holds old rows keeps the old column type: the
-  # DDL applies (the store does not validate on a redefinition) and the next
-  # write fails with "Expected `string` but found `user:u1`" — a store fault
-  # that looks like a domain fault.
-  defp widen_changed_fields(workspace) do
-    # The tables come first. A table the store does not hold yet is created
-    # as an ordinary table when a field is defined on it, and a field that is
-    # `FLEXIBLE` may only be used in a `SCHEMAFULL` table.
-    :ok = apply_statements(workspace, Schema.table_definitions())
-
-    statements =
-      Enum.flat_map(Schema.tables(), fn table ->
-        name = table.name
-        specs = Schema.field_specs()[name] || %{}
-
-        case request(workspace, "INFO FOR TABLE #{name}") do
-          {:ok, [info | _]} ->
-            current = Map.get(info, "fields", %{})
-            declared = Schema.declared_fields()[name] || []
-
-            widened =
-              Enum.flat_map(specs, fn {field, spec} ->
-                # The `id` field is the record's own key, not a column: the
-                # store does not report it in `INFO FOR TABLE`, and a union
-                # type on a record id key is refused outright.
-                if field == "id" do
-                  []
-                else
-                  case current_type(current[field]) do
-                    nil ->
-                      # The field is new. It is created permissive, so the rows
-                      # that predate it stay writable, and it is tightened in
-                      # the third phase once every row carries a value for it.
-                      [widen_statement(name, field, widened_type(nil, spec.type), spec)]
-
-                    "^type" ->
-                      []
-
-                    current ->
-                      # The field changed type. The old values do not fit the
-                      # new type, so it accepts both until the rows are
-                      # converted.
-                      [widen_statement(name, field, widened_type(current, spec.type), spec)]
-                  end
-                end
-              end)
-
-            # The fields this schema no longer declares are widened as well:
-            # the reconciliation removes them from the rows, and a field that
-            # does not accept `NONE` refuses to be unset.
-            #
-            # A nested definition — `roles.*`, the item type of an array — is
-            # left alone: it belongs to the field that holds it, and widening
-            # it on its own makes the array's own type contradict it.
-            dropped =
-              current
-              |> Map.keys()
-              |> Enum.reject(fn field ->
-                field in declared or field == "id" or String.contains?(field, ".")
-              end)
-              |> Enum.sort()
-              |> Enum.flat_map(fn field ->
-                case current_type(current[field]) do
-                  nil ->
-                    []
-
-                  type ->
-                    [
-                      widen_statement(
-                        name,
-                        field,
-                        widened_type(type, type),
-                        %{flexible: flexible?(current[field])}
-                      )
-                    ]
-                end
-              end)
-
-            widened ++ dropped
-
-          _other ->
-            []
-        end
-      end)
-
-    apply_statements(workspace, statements)
-  end
-
-  # Whether the field's own definition is `FLEXIBLE`.
-  defp flexible?(definition) when is_binary(definition),
-    do: String.contains?(definition, " FLEXIBLE")
-
-  defp flexible?(_definition), do: false
-
-  # The widened field: every kind the field accepts while the rows are
-  # converted, plus `none`, so that a row carrying the old value and a row
-  # carrying no value at all are both writable.
-  #
-  # The field's own modifiers are kept. A field that is `FLEXIBLE` accepts
-  # the free-form keys a JSON payload carries, and a widened field that loses
-  # its `FLEXIBLE` refuses the very rows the migration is moving: the store
-  # answers "Found field '`diff`.state', but no such field exists".
-  defp widen_statement(table, field, type, spec) do
-    flexible = if spec[:flexible], do: " FLEXIBLE", else: ""
-
-    "DEFINE FIELD OVERWRITE #{field} ON #{table} TYPE #{type}#{flexible} DEFAULT NONE;"
-  end
-
-  # The type a field is widened to: the kinds the old type and the new one
-  # accept, and `none`.
-  #
-  # `option<X>` is a *modifier*, not a kind: it cannot appear in a union
-  # (`none | object | option<object>` is a parse error), and the store itself
-  # normalises it to `none | object`. The types are therefore reduced to
-  # their kinds before they are joined.
-  defp widened_type(current, target) do
-    [current, target]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.flat_map(&kinds_of/1)
-    |> Kernel.++(["none"])
-    |> Enum.uniq_by(&String.downcase/1)
-    |> Enum.join(" | ")
-  end
-
-  # The type a field currently has, read out of the store's own definition.
-  defp current_type(nil), do: nil
-
-  defp current_type(definition) when is_binary(definition) do
-    case Regex.run(
-           ~r/\bTYPE\s+(.+?)(?:\s+(?:DEFAULT|ASSERT|VALUE|PERMISSIONS|FLEXIBLE)|\s*$)/,
-           definition
-         ) do
-      [_, type] -> String.trim(type)
-      _other -> nil
     end
   end
 
-  defp current_type(_other), do: nil
-
-  # The kinds of a type: `option<object>` is `none | object`, and
-  # `record<user> | NONE` is `record<user> | none`.
-  defp kinds_of(type) do
-    type
-    |> String.split("|")
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.flat_map(fn
-      "option<" <> rest ->
-        # Only the closing ">" of the option belongs to it: the type inside may
-        # be generic, and `array<float>>` must not lose both.
-        inner = rest |> String.slice(0..-2//1) |> String.trim()
-        ["none" | kinds_of(inner)]
-
-      "option" <> _rest ->
-        ["none", "object"]
-
-      part ->
-        [part]
-    end)
-  end
-
-  # The reconciliation phase: every row is rewritten against the current
-  # schema — its reference values are converted, the fields it lacks are
-  # filled, and the fields the schema no longer declares are removed.
-  defp reconcile_rows(workspace) do
-    # Every unique index is dropped for the reconciliation.
-    #
-    # A unique index is built on a field the reconciliation can fill, and the
-    # reconciliation gives every legacy row the same value for a field it
-    # lacks: the index refuses the second row, the reconcile statement is
-    # applied atomically, and the whole migration aborts. The store is then
-    # left unmigrated, and every later run aborts the same way.
-    #
-    # The chain's index is the same case for the same reason — it is unique
-    # on (workspace, sequence) and the legacy rows carry duplicate
-    # sequences — and it is rebuilt once the chain has ordered the rows. The
-    # schema application that follows the reconciliation rebuilds them all.
-    :ok = drop_unique_indexes(workspace)
-
-    Enum.each(Schema.tables(), fn table ->
-      :ok = reconcile_table(workspace, table)
-    end)
-  end
-
-  defp reconcile_table(workspace, table) do
-    name = table.name
-
-    case request(workspace, "SELECT * FROM #{name} LIMIT #{@reconcile_limit}") do
-      {:ok, rows} ->
-        if length(rows) == @reconcile_limit do
-          Logger.warning(
-            "[veritas.store] the reconciliation of #{name} in workspace #{inspect(workspace)} " <>
-              "stopped at its limit of #{@reconcile_limit} rows: the rows past it keep the old shape."
-          )
-        end
-
-        statements =
-          Enum.flat_map(rows, fn row -> row_statements(workspace, name, row) end)
-
-        apply_statements_atomically(workspace, statements)
-
-      _other ->
-        :ok
+  # Ordinary migration verifies the rows read from this adapter, never rows
+  # fetched through whichever adapter happens to be globally configured.
+  defp migration_audit(workspace, :verify) do
+    with {:ok, rows} <- migration_audit_rows(workspace, "sequence") do
+      case Chain.verify(workspace, rows) do
+        {:ok, :intact} -> :ok
+        {:ok, {:broken_at, index}} when is_integer(index) and index >= 0 ->
+          {:error, Error.new(:invalid_request, "the Audit Log chain is broken",
+            details: %{workspace: workspace, index: index})}
+        {:error, reason} -> migration_audit_error(reason)
+        _ -> {:error, Error.new(:protocol, "the host returned an invalid audit verdict")}
+      end
     end
   end
 
-  # Every unique index the schema declares, dropped for the reconciliation
-  # and rebuilt by the schema application that follows it.
-  #
-  # An index is dropped only when the store has it: a store that was never
-  # migrated has no index to remove.
-  defp drop_unique_indexes(workspace) do
-    Enum.each(Schema.declared_unique_indexes(), fn %{table: table, name: name} ->
-      case request(workspace, "INFO FOR TABLE #{table_name(table)}") do
-        {:ok, [info | _]} ->
-          if Map.has_key?(info["indexes"] || %{}, name) do
-            apply_statements(workspace, ["REMOVE INDEX #{name} ON #{table_name(table)};"])
+  defp migration_audit(workspace, :resign), do: establish_chain(workspace)
+
+  defp migration_audit_rows(workspace, order) do
+    case request(workspace, "SELECT * FROM audit_event ORDER BY #{order} ASC;") do
+      {:ok, rows} when is_list(rows) ->
+        if Enum.all?(rows, &(is_map(&1) and is_binary(&1["id"]))) do
+          rows = Enum.map(rows, &normalise_row(&1, "audit_event"))
+          ids = Enum.map(rows, & &1["id"])
+
+          if Enum.all?(rows, &(&1["workspace"] == workspace)) and
+               MapSet.size(MapSet.new(ids)) == length(rows) do
+            {:ok, rows}
+          else
+            {:error, Error.new(:protocol, "the audit inventory has foreign or duplicate rows")}
+          end
+        else
+          {:error, Error.new(:protocol, "the audit inventory was malformed")}
+        end
+
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, Error.new(:protocol, "the audit inventory was malformed")}
+    end
+  end
+
+  # Explicit re-sign alone may ask the host for new assignments. A refusal or
+  # an incomplete assignment set is never successful adoption. The host still
+  # owns signing; the adapter only checks assignment coverage and stores it.
+  defp establish_chain(workspace) do
+    with {:ok, rows} <- migration_audit_rows(workspace, "timestamp") do
+      case Chain.reconcile(rows) do
+        {:ok, assignments} when is_list(assignments) ->
+          with :ok <- complete_chain_assignments(rows, assignments) do
+            if rows == [], do: :ok, else: write_chain(workspace, rows, assignments)
           end
 
-        _other ->
-          :ok
+        {:error, reason} -> migration_audit_error(reason)
+        _ -> {:error, Error.new(:protocol, "the host returned invalid chain assignments")}
       end
-    end)
+    end
   end
 
-  # The chain phase: the Audit Log rows the migration adopts are given a
-  # chain, and the order they are in is the order the chain says.
-  #
-  # The chain itself is the **host's**: the Adapter stores the chain fields
-  # and never computes a chain (`docs/32`), so the host is asked through the
-  # seam and what it answers is written. The sequence each row carries is
-  # the chain's order — the sequence is a property of the chain, not of when
-  # the migration happened to run — and the counter follows it, so the next
-  # event continues the chain rather than colliding with it.
-  defp establish_chain(workspace) do
-    case request(workspace, "SELECT * FROM audit_event ORDER BY timestamp ASC") do
-      {:ok, []} ->
-        {:ok, :established}
+  defp complete_chain_assignments(rows, assignments) do
+    ids = Enum.map(rows, & &1["id"])
 
-      {:ok, rows} ->
-        # The rows are normalised before the chain is reconciled, because the
-        # reconciliation signs what it reads. The normal read path returns a
-        # timestamp as a `%DateTime{}` and a reference as a bare id; the raw
-        # rows carry a timestamp as a string and a reference as a record id.
-        # Canonical signs a `%DateTime{}` as one tag and a string as another, so
-        # the same row signed one way verifies and fails the other. Normalising
-        # makes the migration read the row the way every other read does, and
-        # the existing row verifies as it stands.
-        rows = Enum.map(rows, &normalise_row(&1, "audit_event"))
+    valid_shape? = Enum.all?(assignments, fn
+      %{id: id, hash: hash, prev_hash: previous} ->
+        is_binary(id) and is_binary(hash) and hash != "" and
+          (is_nil(previous) or is_binary(previous))
+      _ -> false
+    end)
 
-        case Chain.reconcile(rows) do
-          {:ok, assignments} ->
-            case write_chain(workspace, rows, assignments) do
-              :ok -> {:ok, :established}
-              {:error, reason} -> {:error, reason}
-            end
+    complete? = valid_shape? and length(assignments) == length(rows) and
+      Enum.sort(Enum.map(assignments, & &1.id)) == Enum.sort(ids)
 
-          {:error, reason} ->
-            # The chain was left exactly as it was found: a row whose hash does
-            # not match its own content has been tampered with, and a row
-            # whose predecessor is missing means the Log has a gap. Rewriting
-            # either would hide what it says.
-            Logger.error(
-              "[veritas.store] the chain of workspace #{inspect(workspace)} was left as it was found: " <>
-                reason
-            )
+    linked? = complete? and
+      Enum.reduce_while(assignments, {:ok, nil}, fn assignment, {:ok, previous} ->
+        if assignment.prev_hash == previous,
+          do: {:cont, {:ok, assignment.hash}},
+          else: {:halt, :invalid}
+      end) != :invalid
 
-            {:ok, :refused}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+    if linked? do
+      :ok
+    else
+      {:error, Error.new(:invalid_request, "the host did not supply a complete audit chain; no rows were re-signed")}
     end
+  end
+
+  defp migration_audit_error(%Error{} = reason), do: {:error, reason}
+  defp migration_audit_error(reason) do
+    {:error, Error.new(:invalid_request, "the host refused the audit chain",
+      details: %{reason: reason})}
   end
 
   # The chain fields the host answered, and the sequence the chain's order
@@ -1309,7 +1009,7 @@ defmodule Veritas.Store.Surreal do
           "DEFINE INDEX OVERWRITE audit_chain ON audit_event FIELDS workspace, sequence UNIQUE;"
         ]
 
-    apply_statements(workspace, statements)
+    apply_statements_atomically(workspace, statements)
   end
 
   # A chain field is written only when it changes: a row that already carries
@@ -1330,157 +1030,6 @@ defmodule Veritas.Store.Surreal do
     do: current == value
 
   defp same_value?(_current, _value), do: false
-
-  defp row_statements(workspace, table, row) do
-    id = bare_id(Map.get(row, "id"))
-    record_id = record_id_literal(id)
-    declared = Schema.declared_fields()[table] || []
-
-    defaults = Schema.defaults()[table] || %{}
-
-    assignments =
-      declared
-      |> Enum.flat_map(fn field ->
-        cond do
-          field == "id" ->
-            ["id = #{encode(id)}"]
-
-          Map.has_key?(row, field) ->
-            # A reference the corpus types as a record was a plain id in the
-            # old rows: it is converted here, or the store would refuse the
-            # write with "Expected `record<user>` but found `u1`".
-            ["#{field} = #{backfill_value(table, field, Map.get(row, field))}"]
-
-          Map.has_key?(defaults, field) ->
-            # A field this schema added and the row does not have takes its
-            # default, so the row matches the schema it is now under.
-            ["#{field} = #{defaults[field]}"]
-
-          true ->
-            # A field the schema requires and the row does not have cannot be
-            # left absent: the store would refuse the write. It is given a
-            # value of the right shape, so the row is valid and the gap is
-            # visible rather than silent.
-            case required_fallback(workspace, table, field, id) do
-              nil -> []
-              value -> ["#{field} = #{value}"]
-            end
-        end
-      end)
-
-    # A field the schema no longer declares is removed first: a row that
-    # still carries it cannot be written at all, and `SET` and `UNSET` cannot
-    # share a statement, so it is two statements in one transaction.
-    extras =
-      row
-      |> Map.keys()
-      |> Enum.reject(fn field -> field in declared end)
-      |> Enum.sort()
-
-    unset =
-      if extras == [],
-        do: [],
-        else: ["UPDATE #{table}:#{record_id} UNSET #{Enum.join(extras, ", ")}"]
-
-    unset ++ ["UPDATE #{table}:#{record_id} SET #{Enum.join(assignments, ", ")}"]
-  end
-
-  defp backfill_value(table, field, value) do
-    # A datetime the store returned as an ISO string is written back as a
-    # datetime literal, or the store refuses the coercion.
-    if is_binary(value) and datetime_field?(table, field) do
-      "d'#{value}'"
-    else
-      case Map.get(Schema.reference_fields()[table] || %{}, field) do
-        nil ->
-          encode(value)
-
-        ref when is_binary(value) ->
-          # A row the store already holds may carry a reference that is not
-          # an id — a row written before the id allowlist existed. It is
-          # escaped rather than refused, because a migration must be able
-          # to carry the data it finds.
-          "type::record('#{ref}', #{escape_literal(bare_id(value))})"
-
-        _other ->
-          encode(value)
-      end
-    end
-  end
-
-  defp datetime_field?(table, field) do
-    case Schema.field_types()[table] |> Map.get(field) do
-      nil -> false
-      type -> String.starts_with?(type, "datetime")
-    end
-  end
-
-  # The value a required field takes when a legacy row does not carry it: one
-  # of the right shape, derived from the row itself.
-  defp required_fallback(workspace, table, field, id) do
-    case Schema.field_types()[table] |> Map.get(field) do
-      nil ->
-        nil
-
-      type ->
-        # A field a unique index covers cannot take the same value in every
-        # row: the index would refuse the second row, and the migration
-        # would abort. Its placeholder is distinct per row, and visible.
-        unique? = field in Schema.unique_indexed_fields(table)
-
-        # A reference takes a reference: the fallback must satisfy the
-        # column's type, not merely be a string of the right shape.
-        case Map.get(Schema.reference_fields()[table] || %{}, field) do
-          nil ->
-            fallback_for(type, id, unique?)
-
-          ref ->
-            placeholder =
-              if unique? do
-                "__placeholder_#{id}"
-              else
-                Map.get(Schema.required_references()[table] || %{}, field) ||
-                  reference_placeholder(ref, workspace)
-              end
-
-            "type::record('#{ref}', #{escape_literal(placeholder)})"
-        end
-    end
-  end
-
-  # A Workspace reference points at the Workspace being migrated; any other
-  # reference falls back to a record named after the table it points at, so
-  # the row is valid and the gap is visible rather than silent.
-  defp reference_placeholder("workspace", workspace), do: workspace
-  defp reference_placeholder(ref, _workspace), do: ref
-
-  defp fallback_for(type, _id, false) do
-    cond do
-      String.starts_with?(type, "string") -> "''"
-      String.starts_with?(type, "int") -> "0"
-      String.starts_with?(type, "bool") -> "false"
-      String.starts_with?(type, "datetime") -> "d'1970-01-01T00:00:00Z'"
-      String.starts_with?(type, "object") -> "{}"
-      String.starts_with?(type, "array") -> "[]"
-      true -> nil
-    end
-  end
-
-  # The fallback for a field a unique index covers. It is distinct per row,
-  # so the index the reconciliation is running under can be rebuilt over the
-  # rows it produced, and it is visible: a row that carries a placeholder
-  # says that its value is a gap, not an answer.
-  defp fallback_for(type, id, true) do
-    cond do
-      String.starts_with?(type, "string") -> "'__placeholder_#{id}'"
-      String.starts_with?(type, "int") -> "#{abs(:erlang.phash2(id, 4_000_000_000)) + 1}"
-      String.starts_with?(type, "bool") -> "false"
-      String.starts_with?(type, "datetime") -> "d'1970-01-01T00:00:00Z'"
-      String.starts_with?(type, "object") -> "{}"
-      String.starts_with?(type, "array") -> "[]"
-      true -> nil
-    end
-  end
 
   @doc "The schema version this Adapter expects."
   @spec migration_version() :: String.t()

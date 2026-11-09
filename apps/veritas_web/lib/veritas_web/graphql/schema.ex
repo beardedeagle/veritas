@@ -8,17 +8,10 @@ defmodule Veritas.Web.GraphQL.Schema do
   operation available in the UI is available in GraphQL and the CLI" a
   property of the code rather than a promise.
 
-  ## Errors are binaries
+  ## Safe errors
 
-  A resolver hands Absinthe a **binary**, never an error struct. Absinthe's
-  error formatter calls `String.Chars.to_string/1` on whatever a resolver
-  returns, and `Veritas.Store.Error` does not implement that protocol: handing
-  the struct back raised `Protocol.UndefinedError` inside the formatter, so
-  every store fault became an HTTP 500 with a debug page carrying the raw
-  engine error body, the internal namespace name and the request parameters.
-  `Veritas.Store.Error.message/1` already renders every shape the domain and
-  the store can produce, so the surface uses it rather than a second
-  formatter.
+  Resolvers return a generic message and allowlisted structured extensions from
+  `Veritas.Store.Error.public/1`, never exception structs or engine bodies.
 
   ## Cost
 
@@ -65,6 +58,8 @@ defmodule Veritas.Web.GraphQL.Schema do
     field(:title, :string)
     field(:description, :string)
     field(:priority, :string)
+    field(:domain_revision, :integer)
+    field(:workflow_revision, :integer)
     field(:opened_at, :string)
   end
 
@@ -194,6 +189,8 @@ defmodule Veritas.Web.GraphQL.Schema do
       arg(:description, :string)
       arg(:priority, :string)
       arg(:correlation_id, :string)
+      arg(:domain_fields_json, :string)
+      arg(:expected_policy_version, :string)
       resolve(&resolve_open_ticket/3)
     end
 
@@ -211,6 +208,10 @@ defmodule Veritas.Web.GraphQL.Schema do
       arg(:to_state, non_null(:string))
       arg(:reason, :string)
       arg(:correlation_id, :string)
+      arg(:domain_fields_json, :string)
+      arg(:expected_revision, :integer)
+      arg(:expected_domain_revision, :integer)
+      arg(:expected_policy_version, :string)
       resolve(&resolve_transition/3)
     end
 
@@ -244,6 +245,9 @@ defmodule Veritas.Web.GraphQL.Schema do
       arg(:state, :string)
       arg(:priority, :string)
       arg(:requester, :string)
+      arg(:expected_revision, :integer)
+      arg(:expected_domain_revision, :integer)
+      arg(:expected_policy_version, :string)
       resolve(&resolve_update/3)
     end
   end
@@ -376,26 +380,16 @@ defmodule Veritas.Web.GraphQL.Schema do
   end
 
   defp resolve_open_ticket(_parent, args, resolution) do
-    attrs = %{
-      "title" => args[:title],
-      "description" => args[:description] || "",
-      "requester" => args[:requester],
-      "priority" => args[:priority] || "medium"
-    }
+    attrs = args |> Map.take([:title, :description, :requester, :priority])
+      |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
+    attrs = if args.ticket_type == "incident", do: attrs,
+      else: Map.put_new(attrs, "priority", "medium")
 
-    with :ok <-
-           guard(resolution, "ticket:write", %{
-             workspace: args[:workspace],
-             ticket_type: args[:ticket_type]
-           }),
-         {:ok, row} <-
-           Tickets.open(
-             args[:workspace],
-             args[:ticket_type],
-             attrs,
-             actor(resolution),
-             args[:correlation_id]
-           ) do
+    with {:ok, fields} <- decode_domain(args[:domain_fields_json]),
+         :ok <- ticket_write_guard(resolution, args.workspace, args.ticket_type),
+         {:ok, row} <- Tickets.open(args.workspace, args.ticket_type,
+           Map.put(attrs, "domain_fields", fields), principal(resolution), actor(resolution),
+           request_opts(args)) do
       {:ok, to_ticket(row)}
     else
       {:error, reason} -> {:error, error(reason)}
@@ -403,23 +397,13 @@ defmodule Veritas.Web.GraphQL.Schema do
   end
 
   defp resolve_transition(_parent, args, resolution) do
-    opts =
-      []
-      |> maybe(:reason, args[:reason])
-      |> maybe(:correlation_id, args[:correlation_id])
-
-    with :ok <- guard(resolution, "ticket:read", %{workspace: args[:workspace]}),
-         {:ok, row} <-
-           Tickets.transition(
-             args[:workspace],
-             args[:id],
-             args[:to_state],
-             principal(resolution),
-             opts
-           ) do
+    with {:ok, fields} <- decode_domain(args[:domain_fields_json]),
+         :ok <- ticket_read_guard(resolution, args.workspace, args.id),
+         {:ok, row} <- Tickets.transition(args.workspace, args.id, args.to_state,
+           principal(resolution), actor(resolution),
+           Keyword.put(request_opts(args), :domain_fields, fields)) do
       {:ok, to_ticket(row)}
     else
-      {:error, :not_found} -> {:error, "the ticket does not exist"}
       {:error, reason} -> {:error, error(reason)}
     end
   end
@@ -438,22 +422,32 @@ defmodule Veritas.Web.GraphQL.Schema do
       |> Map.take([:title, :description, :state, :priority, :requester])
       |> Map.new(fn {field, value} -> {Atom.to_string(field), value} end)
 
-    # The ticket's type is what the role matrix is indexed by, so it is read
-    # before the guard — and the read is itself guarded. Nothing is written
-    # until the guard has said yes.
-    with :ok <- guard(resolution, "ticket:read", %{workspace: args[:workspace]}),
-         {:ok, ticket} <- Tickets.read(args[:workspace], args[:id]),
-         false <- is_nil(ticket),
-         :ok <-
-           guard(resolution, "ticket:write", %{
-             workspace: args[:workspace],
-             ticket_type: ticket["ticket_type"]
-           }),
-         {:ok, row} <- Tickets.update(args[:workspace], args[:id], attrs, actor(resolution)) do
-      {:ok, to_ticket(row)}
-    else
+    # Checked read authorization precedes type/existence lookup. Only the exact
+    # authorized not_found result can enter the legacy non-Incident branch.
+    result = case Tickets.read_domain(args.workspace, args.id, principal(resolution)) do
+      {:ok, _view} -> Tickets.update(args.workspace, args.id, attrs,
+        principal(resolution), actor(resolution), request_opts(args))
+      {:error, :not_found} -> update_non_incident(args, attrs, resolution)
+      {:error, _} = error -> error
+    end
+    case result do
+      {:ok, row} -> {:ok, to_ticket(row)}
       {:error, reason} -> {:error, error(reason)}
-      true -> {:error, "the ticket does not exist"}
+    end
+  end
+
+  defp update_non_incident(args, attrs, resolution) do
+    with :ok <- guard(resolution, "ticket:read", %{workspace: args.workspace}),
+         {:ok, ticket} <- Tickets.read(args.workspace, args.id),
+         false <- is_nil(ticket),
+         :ok <- guard(resolution, "ticket:write", %{workspace: args.workspace,
+           ticket_type: ticket["ticket_type"]}),
+         {:ok, row} <- Tickets.update(args.workspace, args.id, attrs,
+           principal(resolution), actor(resolution), request_opts(args)) do
+      {:ok, row}
+    else
+      true -> {:error, :not_found}
+      {:error, _} = error -> error
     end
   end
 
@@ -479,6 +473,10 @@ defmodule Veritas.Web.GraphQL.Schema do
     end
   end
 
+  defp to_ticket(%{"domain_ticket" => ticket} = run) do
+    ticket |> to_ticket() |> Map.put(:workflow_revision, run["revision"])
+      |> Map.put(:domain_revision, run["domain_revision"])
+  end
   defp to_ticket(row) do
     %{
       id: row["id"],
@@ -488,6 +486,8 @@ defmodule Veritas.Web.GraphQL.Schema do
       title: row["title"],
       description: row["description"],
       priority: row["priority"],
+      domain_revision: row["domain_revision"],
+      workflow_revision: row["workflow_revision"],
       opened_at: row["opened_at"] && to_string(row["opened_at"])
     }
   end
@@ -507,15 +507,35 @@ defmodule Veritas.Web.GraphQL.Schema do
   defp maybe(opts, _key, nil), do: opts
   defp maybe(opts, key, value), do: Keyword.put(opts, key, value)
 
-  # The error a resolver hands back is a **binary**. Absinthe's error
-  # formatter calls `String.Chars.to_string/1` on it, and
-  # `Veritas.Store.Error` does not implement that protocol — handing the
-  # struct back raised `Protocol.UndefinedError` and turned every store
-  # fault into an HTTP 500 with a debug page. `Error.message/1` already
-  # renders every shape the domain and the store can produce, so the surface
-  # uses it rather than a second formatter: a refusal the domain **named**
-  # reads in the same words here as it does in the CLI and on a screen.
-  defp error(reason), do: Error.message(reason) || "the operation could not be completed"
+  defp error(reason) do
+    safe = Error.public(reason)
+    %{message: safe.message, extensions: Map.delete(safe, :message)}
+  end
+
+  # Incident mutations perform checked authorization and denial auditing inside
+  # their domain transaction, not through the older best-effort surface guard.
+  defp ticket_read_guard(resolution, workspace, id) do
+    case Tickets.read_domain(workspace, id, principal(resolution)) do
+      {:ok, _} -> :ok
+      {:error, :not_found} -> guard(resolution, "ticket:read", %{workspace: workspace})
+      {:error, _} = error -> error
+    end
+  end
+
+  defp ticket_write_guard(_resolution, _workspace, "incident"), do: :ok
+  defp ticket_write_guard(resolution, workspace, type),
+    do: guard(resolution, "ticket:write", %{workspace: workspace, ticket_type: type})
+
+  defp request_opts(args), do: args |> Map.take([:reason, :correlation_id,
+    :expected_revision, :expected_domain_revision, :expected_policy_version]) |> Map.to_list()
+
+  defp decode_domain(nil), do: {:ok, %{}}
+  defp decode_domain(text) do
+    case Jason.decode(text) do
+      {:ok, %{} = fields} -> {:ok, fields}
+      _ -> {:error, :invalid_request}
+    end
+  end
 
   # The cost of a list field is the number of rows it may return, times the
   # cost of one row. The store caps a list at 1_000 rows, so a request for

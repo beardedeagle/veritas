@@ -32,6 +32,7 @@ defmodule Veritas.Plugin.Host.Default do
   @behaviour Veritas.Plugin.Host
 
   alias Veritas.Store
+  alias Veritas.Store.Error
 
   @impl true
   @spec init(term()) :: term()
@@ -43,12 +44,16 @@ defmodule Veritas.Plugin.Host.Default do
   def call(context, %{"method" => method, "params" => params}, _state) do
     params = if is_map(params), do: params, else: %{}
 
-    case method do
+    result = case method do
       "read_records" -> read_records(context, table(params), decode_filter(params["filter"]))
       "write_records" -> write_records(context, table(params), records(params))
       "query_graph" -> query_graph(context, params)
       "publish_event" -> publish_event(context, params["event_type"], params["payload"])
       _other -> {:error, :unknown_method}
+    end
+    case result do
+      {:error, reason} when method in ["read_records", "write_records"] -> {:error, Error.public(reason)}
+      _ -> result
     end
   end
 
@@ -59,7 +64,7 @@ defmodule Veritas.Plugin.Host.Default do
     workspace = workspace(context)
 
     case Store.transaction(workspace, fn tx -> Store.list(tx, table, filter) end) do
-      {:ok, rows} -> {:ok, %{rows: rows, cursor: nil}}
+      {:ok, rows} -> project_records(context, table, rows)
       {:error, reason} -> {:error, reason}
       other -> {:error, other}
     end
@@ -120,8 +125,10 @@ defmodule Veritas.Plugin.Host.Default do
         Veritas.Core.Tickets.open(
           workspace,
           record["ticket_type"],
-          attrs,
-          actor(context)
+          Map.drop(attrs, ~w(expected_revision expected_domain_revision expected_policy_version)),
+          principal(context),
+          actor(context),
+          ticket_opts(context, record)
         )
 
       id ->
@@ -149,9 +156,9 @@ defmodule Veritas.Plugin.Host.Default do
            workspace,
            id,
            state,
-           Veritas.Core.Principal.new(context.plugin_id, workspace, [], kind: :service),
-           reason: reason(record),
-           correlation_id: record["correlation_id"]
+           principal(context),
+           actor(context),
+           ticket_opts(context, record)
          ) do
       {:ok, moved} -> apply_content(workspace, id, record, context, moved)
       {:error, reason} -> {:error, reason}
@@ -178,9 +185,9 @@ defmodule Veritas.Plugin.Host.Default do
                workspace,
                id,
                content,
+               principal(context),
                actor(context),
-               reason: reason(record),
-               correlation_id: record["correlation_id"]
+               ticket_opts(context, record)
              ) do
           {:ok, updated} -> {:ok, updated}
           {:error, :no_change} -> {:ok, moved}
@@ -200,7 +207,7 @@ defmodule Veritas.Plugin.Host.Default do
   #
   # A write that says nothing at all is the refusal it has always been.
   defp edit_ticket(workspace, id, record, context) do
-    attrs = Map.drop(record, ["id", "actor", "reason", "correlation_id", "state", "to_state"])
+    attrs = Map.drop(record, ~w(id actor reason correlation_id state to_state expected_revision expected_domain_revision expected_policy_version))
 
     if map_size(attrs) == 0 do
       {:error, :no_state}
@@ -209,9 +216,9 @@ defmodule Veritas.Plugin.Host.Default do
         workspace,
         id,
         attrs,
+        principal(context),
         actor(context),
-        reason: reason(record),
-        correlation_id: record["correlation_id"]
+        ticket_opts(context, record)
       )
     end
   end
@@ -228,6 +235,44 @@ defmodule Veritas.Plugin.Host.Default do
       state when is_binary(state) -> {:ok, state}
       _other -> {:error, :no_state}
     end
+  end
+
+  defp project_records(context, :ticket, rows) do
+    Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, projected} ->
+      if row["ticket_type"] == "incident" do
+        case Veritas.Core.Tickets.read_domain(workspace(context), row["id"], principal(context),
+               verify_machine_grant: grant_verifier(context, "ticket:read")) do
+          {:ok, view} ->
+            metadata = %{ "domain" => view.domain, "domain_revision" => view.domain_revision,
+              "workflow_revision" => view.workflow_revision, "readiness" => view.readiness,
+              "raw_legacy" => view.raw_legacy, "provenance" => view.provenance,
+              "clocks" => view.clocks, "policy" => view.policy}
+            {:cont, {:ok, [Map.merge(view.ticket, metadata) | projected]}}
+          {:error, _} = error -> {:halt, error}
+        end
+      else
+        {:cont, {:ok, [row | projected]}}
+      end
+    end)
+    |> case do
+      {:ok, projected} -> {:ok, %{rows: Enum.reverse(projected), cursor: nil}}
+      error -> error
+    end
+  end
+  defp project_records(_context, _table, rows), do: {:ok, %{rows: rows, cursor: nil}}
+
+  defp principal(context), do: Veritas.Core.Principal.new(context.plugin_id,
+    workspace(context), [], kind: :service)
+
+  # Host closures are bound to this invocation, never accepted from Plugin input.
+  defp grant_verifier(context, scope),
+    do: fn -> Veritas.Plugin.Host.Capability.check(context, scope) end
+
+  defp ticket_opts(context, record) do
+    preconditions = for key <- [:expected_revision, :expected_domain_revision, :expected_policy_version],
+      Map.has_key?(record, Atom.to_string(key)), do: {key, record[Atom.to_string(key)]}
+    preconditions ++ [reason: reason(record), correlation_id: record["correlation_id"],
+      verify_machine_grant: grant_verifier(context, "ticket:write")]
   end
 
   defp reason(record), do: record["reason"] || "a plugin wrote the record"

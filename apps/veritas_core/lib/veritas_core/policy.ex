@@ -283,6 +283,186 @@ defmodule Veritas.Core.Policy do
   end
 
   @doc """
+  Authorizes an Incident operation and checks persistence of every denial.
+
+  Unlike `authorize/4`, this entry point returns a denial-audit storage error
+  to its transaction owner. Context contains host-read facts, never transport
+  claims: operation, from/to state, changed fields, assignee/hold owner and an
+  optional host-created zero-arity machine grant verifier. Configuration uses
+  `:incident_policy_admin`, not account-administration authority.
+  """
+  @spec authorize_incident(Principal.t() | nil, capability(), map(), Veritas.Store.tx()) ::
+          :allow | {:deny, term()} | {:error, Error.t()}
+  def authorize_incident(principal, capability, context, tx) do
+    context = incident_context(context)
+
+    case incident_decision(principal, capability, context) do
+      :allow ->
+        :allow
+
+      {:deny, reason} ->
+        event = %{
+          subject: context[:ticket_id] || subject_of(principal),
+          subject_table: if(context[:ticket_id], do: "ticket", else: "principal"),
+          from_state: context[:from_state],
+          to_state: "refused",
+          actor: actor_of(principal),
+          reason: if(is_binary(reason), do: reason, else: "Incident operation refused"),
+          correlation_id: context[:correlation_id],
+          diff: %{"capability" => to_string(capability),
+            "operation" => to_string(context[:operation] || :read),
+            "ticket_type" => "incident", "refusal" => incident_reason_code(reason)}
+        }
+
+        case Audit.append(tx, context[:workspace], event) do
+          {:ok, _} -> {:deny, reason}
+          {:error, _} = error -> error
+        end
+    end
+  end
+
+  @doc "Previews the Incident decision for a control without recording a denial."
+  @spec permitted_incident?(Principal.t() | nil, capability(), map()) :: boolean()
+  def permitted_incident?(principal, capability, context) do
+    incident_decision(principal, capability, incident_context(context)) == :allow
+  end
+
+  defp incident_context(context) when is_map(context) do
+    Map.merge(normalise_context(context), Map.take(context,
+      [:operation, :from_state, :ticket_id, :fields, :assignee, :hold_owner,
+       :verify_machine_grant, :audit_actor, :conditional_approval, :approved,
+       :approval_required]))
+  end
+  defp incident_context(_context), do: %{}
+
+  defp incident_decision(nil, _capability, context),
+    do: {:deny, {:principal_required, %{operation: context[:operation] || :incident_write}}}
+
+  defp incident_decision(%Principal{} = principal, capability, context) do
+    cond do
+      not is_binary(principal.id) or principal.id == "" or not is_list(principal.roles) or
+          not is_binary(principal.workspace) or principal.workspace == "" ->
+        {:deny, {:principal_required, %{operation: context[:operation] || :incident_write}}}
+
+      principal.workspace != context[:workspace] ->
+        {:deny, "The Principal does not act in this Workspace."}
+
+      capability == :incident_policy_admin ->
+        cond do
+          principal.kind != :human or :platform_admin not in principal.roles ->
+            {:deny, "Only a human Platform Admin may administer Incident policy."}
+          context[:approval_required] == true and context[:approved] != true ->
+            {:deny, :approval_required}
+          true -> :allow
+        end
+
+      principal.kind == :service and capability == "ticket:read" and context[:operation] == :read ->
+        machine_incident_decision(principal, context)
+
+      capability in ["ticket:read", "ci:read"] ->
+        decide(principal, capability, Map.put(context, :ticket_type, context[:ticket_type] || "incident"))
+
+      principal.kind == :service and context[:operation] in [:create, :content] ->
+        machine_incident_decision(principal, context)
+
+      principal.kind != :human ->
+        {:deny, "Incident classification, ownership, progression and approval require a human."}
+
+      true ->
+        human_incident_decision(principal, context)
+    end
+  end
+
+  defp incident_decision(_, _capability, context),
+    do: {:deny, {:principal_required, %{operation: context[:operation] || :incident_write}}}
+
+  defp machine_incident_decision(principal, context) do
+    verifier = context[:verify_machine_grant]
+    actor = context[:audit_actor]
+    fields = context[:fields] || []
+
+    if principal.roles == [] and is_map(actor) and Map.get(actor, :id) == principal.id and
+         Map.get(actor, :type) in ["plugin", :plugin, "adapter", :adapter, "service", :service] and
+         fields -- ~w(title description requester) == [] and is_function(verifier, 0) do
+      try do
+        case verifier.() do
+          :ok -> :allow
+          _ -> {:deny, "The live machine grant does not permit this Incident operation."}
+        end
+      rescue
+        _ -> {:deny, "The live machine grant could not be verified."}
+      catch
+        _, _ -> {:deny, "The live machine grant could not be verified."}
+      end
+    else
+      {:deny, "A machine grant permits draft intake and ordinary content only."}
+    end
+  end
+
+  defp human_incident_decision(principal, context) do
+    fields = context[:fields] || []
+    managers = [:service_desk_manager, :incident_manager]
+    desk = [:service_desk_agent, :incident_manager]
+    classification = ~w(impact urgency severity incident_class priority priority_justification)
+    manager_fields = ~w(incident_class)
+    to_state = context[:to_state]
+    operation = context[:operation]
+    work_actor = incident_role?(principal, [:incident_manager]) or principal.id == context[:assignee]
+    hold_actor = incident_role?(principal, [:incident_manager]) or principal.id == context[:hold_owner]
+
+    cond do
+      Enum.any?(fields, &(&1 in manager_fields)) and not incident_role?(principal, managers) ->
+        {:deny, "Incident classification requires a Service Desk Manager or Incident Manager."}
+      "priority_override" in fields and not incident_role?(principal, [:service_desk_manager]) ->
+        {:deny, "A priority override requires Service Desk Manager approval."}
+      "priority_override" in fields and context[:approved] != true ->
+        {:deny, :approval_required}
+      Enum.any?(fields, &(&1 in classification)) and
+          not incident_role?(principal, [:service_desk_agent | managers]) ->
+        {:deny, "The requester cannot classify an Incident or select its priority."}
+      Enum.any?(fields, &(&1 in ~w(assignee hold_owner_id))) and not incident_role?(principal, desk ++ managers) ->
+        {:deny, "Incident ownership requires an authorized desk or Incident Manager."}
+      Enum.any?(fields, &(&1 in ~w(track_plan restore_track restoration_evidence root_cause_track resolution_code workaround))) and not work_actor ->
+        {:deny, "Restoration facts require the Incident Manager or the assigned human."}
+      operation == :create and not incident_role?(principal, [:requester | desk] ++ managers) ->
+        {:deny, "This Principal may not create an Incident draft."}
+      operation == :create ->
+        :allow
+      operation in [:transition, :advance] ->
+        allowed = case to_state do
+          "new" -> incident_role?(principal, [:requester | desk] ++ managers)
+          "acknowledged" -> incident_role?(principal, desk)
+          "in_progress" -> work_actor
+          "on_hold" -> hold_actor
+          "resolved" -> work_actor
+          "closed" -> incident_role?(principal, desk)
+          "cancelled" -> incident_role?(principal, [:service_desk_agent])
+          _ -> false
+        end
+
+        cond do
+          not allowed -> {:deny, "The Principal is not an authorized actor for this Incident state."}
+          context[:conditional_approval] == true and context[:approved] != true -> {:deny, :approval_required}
+          context[:conditional_approval] == true and not is_nil(conflict(principal, context)) and
+              not platform_admin_in_home_lab?(principal) -> {:deny, conflict(principal, context)}
+          true -> :allow
+        end
+      operation in [:content, :amend, :assign] ->
+        if incident_role?(principal, desk ++ managers) or work_actor or hold_actor,
+          do: :allow, else: {:deny, "This Principal may not amend this Incident."}
+      true -> {:deny, "The Incident operation is not authorized."}
+    end
+  end
+
+  defp incident_role?(%Principal{kind: :human, roles: roles}, allowed) do
+    Enum.any?(roles, &(&1 in allowed)) or (:platform_admin in roles and profile() == :home_lab)
+  end
+
+  defp incident_reason_code({code, _}) when is_atom(code), do: Atom.to_string(code)
+  defp incident_reason_code(code) when is_atom(code), do: Atom.to_string(code)
+  defp incident_reason_code(_), do: "not_authorised"
+
+  @doc """
   Decides without recording anything.
 
   The decision is the same one `authorize/3` makes; this one does not write

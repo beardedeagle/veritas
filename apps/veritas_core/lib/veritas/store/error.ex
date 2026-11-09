@@ -113,6 +113,77 @@ defmodule Veritas.Store.Error do
   def message(reason) when is_binary(reason), do: reason
   def message(reason), do: inspect(reason)
 
+  @doc """
+  Returns transport-safe error data without engine bodies or submitted values.
+
+  Args:
+    reason: An internal store failure or named domain refusal.
+
+  Returns:
+    A map with a stable string code, generic message and allowlisted details.
+  """
+  @spec public(term()) :: map()
+  def public(%__MODULE__{}),
+    do: %{code: "store_error", message: "The operation could not be persisted. Try again later."}
+
+  def public({kind, current}) when kind in [:domain_revision_conflict, :policy_revision_conflict] and
+      (is_integer(current) or is_nil(current)),
+    do: %{code: Atom.to_string(kind), message: "This changed. Reload before trying again.", current_revision: current}
+
+  def public({:policy_version_conflict, current}) when is_binary(current) or is_nil(current),
+    do: %{code: "policy_version_conflict", message: "The active policy changed. Reload before trying again.", current_version: current}
+
+  def public({kind, errors}) when kind in [:invalid_domain_fields, :policy_invalid] and is_map(errors),
+    do: %{code: Atom.to_string(kind), message: "Check the highlighted fields.", fields: public_fields(errors)}
+
+  def public({:policy_unconfigured, %{missing: paths, operation: operation}}) do
+    %{code: "policy_unconfigured", message: "Required Incident policy configuration is missing.",
+      missing: public_paths(paths), operation: public_operation(operation)}
+  end
+
+  def public({:principal_required, %{operation: operation}}),
+    do: %{code: "principal_required", message: "An authorized Principal is required.", operation: public_operation(operation)}
+
+  def public({:not_updatable, field}) do
+    details = if safe_path?(field), do: %{field: field}, else: %{}
+    Map.merge(%{code: "not_updatable", message: "This field cannot be changed here."}, details)
+  end
+  def public({:missing_fields, fields}),
+    do: %{code: "missing_fields", message: "Complete the required fields.", missing: public_paths(fields)}
+  def public({:invalid_transition, _, _}),
+    do: %{code: "invalid_transition", message: "This state transition is not allowed."}
+  def public({kind, _}) when kind in [:invalid_ticket_type, :invalid_answers, :invalid_definition,
+      :invalid_choice, :step_type_mismatch, :missing_attribute, :invalid_classification],
+    do: %{code: Atom.to_string(kind), message: "The supplied fields are not valid for this operation."}
+
+  def public(reason) when reason in [:revision_conflict, :workflow_not_published, :workflow_completed,
+      :workflow_step_required, :ai_draft_required, :not_an_ai_step, :approval_required,
+      :no_provider, :no_model, :unknown_adapter, :not_found, :no_change, :not_draftable,
+      :cannot_read_draft, :no_revision, :incompatible_output],
+    do: %{code: Atom.to_string(reason), message: message(reason)}
+
+  def public(reason) when reason in [:clock_evidence_required, :timezone_provider_unavailable,
+      :forbidden, :unauthorized, :scope_denied, :human_required, :role_required,
+      :workspace_denied, :no_state, :unsupported, :invalid_request],
+    do: %{code: Atom.to_string(reason), message: "The operation was refused (#{reason})."}
+
+  def public(_), do: %{code: "operation_refused", message: "The operation could not be completed."}
+
+  defp public_fields(errors) do
+    Map.new(for {path, code} <- errors, safe_path?(path),
+      into: [], do: {path, if(is_atom(code), do: Atom.to_string(code), else: "invalid")})
+  end
+
+  defp public_paths(paths) when is_list(paths), do: Enum.filter(paths, &safe_path?/1)
+  defp public_paths(_), do: []
+  defp safe_path?(path) when is_binary(path),
+    do: byte_size(path) <= 200 and Regex.match?(~r/\A[a-zA-Z0-9_.-]+\z/, path)
+  defp safe_path?(_), do: false
+  defp public_operation(operation) when operation in [:create, :content, :assign, :amend, :read,
+      :transition, :advance, :publish, :derive_priority, :acknowledge, :response, :resolution, :reopen, :hold, :clock],
+    do: Atom.to_string(operation)
+  defp public_operation(_), do: "incident"
+
   defp default_retryable?(:unavailable), do: true
   defp default_retryable?(:timeout), do: true
   defp default_retryable?(:conflict), do: true

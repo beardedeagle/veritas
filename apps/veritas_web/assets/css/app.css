@@ -245,12 +245,49 @@
 }
 
 .v-rail {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 12px 8px;
   background-color: var(--color-base-200);
   border-right: 1px solid var(--color-base-300);
+}
+
+.v-rail-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 12px 8px;
+}
+
+.v-rail-toggle {
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+}
+
+.v-rail-toggle[aria-expanded="false"] .v-rail-toggle-icon {
+  transform: rotate(180deg);
+}
+
+.v-rail-links {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+:root[data-rail-collapsed="true"] {
+  --v-rail-w: 64px;
+}
+
+:root[data-rail-collapsed="true"] .v-rail-label {
+  display: none;
 }
 
 .v-rail-link {
@@ -343,21 +380,15 @@
 
 /* ── Narrow viewports ───────────────────────────────────────────────────────
  *
- * The operator's product is a terminal and a wide screen; the enterprise
- * persona is a laptop. Below the rail's own width the rail becomes a
- * horizontal strip rather than disappearing, because a navigation you cannot
- * see is a navigation you cannot use.
+ * Keep the logo and navigation visible on small screens. The sidebar defaults
+ * to icons here; an explicit expansion still reveals the labels.
  */
 @media (max-width: 900px) {
-  .v-shell {
-    grid-template-columns: minmax(0, 1fr);
+  :root:not([data-rail-collapsed="false"]) {
+    --v-rail-w: 64px;
   }
 
-  .v-rail {
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    border-right: 0;
-    border-bottom: 1px solid var(--color-base-300);
+  :root:not([data-rail-collapsed="false"]) .v-rail-label {
+    display: none;
   }
 }

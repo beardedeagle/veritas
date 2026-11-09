@@ -1,7 +1,8 @@
 defmodule Veritas.Web.WorkflowLive.Index do
   use Veritas.Web, :live_view
   alias Veritas.Agentic.Runner
-  alias Veritas.Core.{Policy, Workflows}
+  alias Veritas.Core.{Policy, Tickets, Workflows}
+  import Veritas.Web.WorkflowLive.Components
   alias Veritas.Store.Error
 
   def mount(_params, _session, socket) do
@@ -18,11 +19,16 @@ defmodule Veritas.Web.WorkflowLive.Index do
        busy: false,
        models: [],
        model: "",
+       policy_envelope: nil,
+       policy_form: policy_form(%{}),
+       policy_validation: nil,
+       surface_error: nil,
+       can_edit_policy: socket.assigns.principal.kind == :human and :platform_admin in socket.assigns.principal.roles,
        can_edit:
          Policy.permitted?(socket.assigns.principal, "account:administrate", %{
            workspace: workspace
          })
-     )}
+     ) |> load_policy()}
   end
 
   def handle_params(params, _uri, socket) do
@@ -57,7 +63,7 @@ defmodule Veritas.Web.WorkflowLive.Index do
 
           {:error, reason} ->
             {:noreply,
-             socket |> put_flash(:error, Error.message(reason)) |> push_patch(to: ~p"/workflows")}
+             socket |> put_flash(:error, Error.public(reason).message) |> push_patch(to: ~p"/workflows")}
         end
     end
   end
@@ -89,6 +95,7 @@ defmodule Veritas.Web.WorkflowLive.Index do
         |> Map.put("required", f["required"] in [true, "true"])
         |> Map.put("options", split(f["options_text"]))
         |> Map.delete("options_text")
+        |> then(fn field -> if field["binding"] in [nil, ""], do: Map.delete(field, "binding"), else: field end)
       end)
 
     changed =
@@ -185,6 +192,58 @@ defmodule Veritas.Web.WorkflowLive.Index do
      )}
   end
 
+  def handle_event("policy-change", %{"policy" => form}, socket),
+    do: {:noreply, assign(socket, policy_form: form, policy_validation: nil)}
+
+  def handle_event("policy-add", params, socket) do
+    path = case params["kind"] do
+      "calendar" -> ["calendars"]
+      "weekly" -> ["calendars", params["calendar"], "weekly", params["day"], "intervals"]
+      "date" -> ["calendars", params["calendar"], "nonworking_dates"]
+      "exception" -> ["calendars", params["calendar"], "exceptions"]
+      "exception-interval" -> ["calendars", params["calendar"], "exceptions", params["row"], "intervals"]
+      _ -> nil
+    end
+    if socket.assigns.can_edit_policy and path,
+      do: {:noreply, assign(socket, :policy_form, add_policy_row(socket.assigns.policy_form, path, %{}))},
+      else: {:noreply, socket}
+  end
+
+  def handle_event("policy-action", %{"policy" => form} = params, socket) do
+    socket = assign(socket, :policy_form, form)
+    %{workspace: workspace, principal: principal, policy_envelope: envelope} = socket.assigns
+    result = with {:ok, document} <- policy_document(form) do
+      case params["action"] do
+        "validate" -> Tickets.validate_incident_policy(workspace, document, principal)
+        "save" when not is_nil(envelope) ->
+          Tickets.save_incident_policy(workspace, document, principal, envelope.policy_revision)
+        _ -> {:error, :invalid_request}
+      end
+    end
+    case result do
+      {:ok, %{document: _} = validation} ->
+        {:noreply, assign(socket, policy_validation: validation, surface_error: nil)}
+      {:ok, envelope} ->
+        {:noreply, socket |> assign(policy_envelope: envelope, surface_error: nil,
+          policy_validation: nil) |> put_flash(:info, "Incident policy draft saved; not published.")}
+      {:error, reason} -> {:noreply, assign(socket, :surface_error, Error.public(reason))}
+    end
+  end
+
+  def handle_event("policy-publish", params, socket) do
+    envelope = socket.assigns.policy_envelope
+    case Tickets.publish_incident_policy(socket.assigns.workspace, socket.assigns.principal,
+           envelope && envelope.policy_revision, approve: params["approve"] == "true",
+           expected_policy_version: envelope && envelope.active_version) do
+      {:ok, updated} ->
+        {:noreply, socket |> assign(policy_envelope: updated, surface_error: nil,
+          policy_validation: nil) |> put_flash(:info, "Saved Incident policy published. Existing clocks retain their bindings.")}
+      {:error, reason} -> {:noreply, assign(socket, :surface_error, Error.public(reason))}
+    end
+  end
+
+  def handle_event("policy-reload", _, socket), do: {:noreply, load_policy(socket)}
+
   def handle_event("save", _, socket), do: save(socket, false)
   def handle_event("publish", _, socket), do: save(socket, true)
 
@@ -228,7 +287,7 @@ defmodule Veritas.Web.WorkflowLive.Index do
        )}
 
   def handle_async(_name, {:ok, {:error, reason}}, socket),
-    do: {:noreply, socket |> assign(:busy, false) |> put_flash(:error, Error.message(reason))}
+    do: {:noreply, socket |> assign(:busy, false) |> put_flash(:error, Error.public(reason).message)}
 
   def handle_async(_name, {:exit, _reason}, socket),
     do:
@@ -274,11 +333,21 @@ defmodule Veritas.Web.WorkflowLive.Index do
             {:noreply, push_patch(socket, to: ~p"/workflows/#{workflow["id"]}")}
 
           {:error, reason} ->
-            {:noreply, put_flash(socket, :error, Error.message(reason))}
+            {:noreply, put_flash(socket, :error, Error.public(reason).message)}
         end
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, Error.message(reason))}
+        {:noreply, put_flash(socket, :error, Error.public(reason).message)}
+    end
+  end
+
+  defp load_policy(socket) do
+    case Tickets.incident_policy(socket.assigns.workspace, socket.assigns.principal) do
+      {:ok, envelope} ->
+        document = if envelope.draft, do: envelope.draft.document, else: envelope.active || %{}
+        assign(socket, policy_envelope: envelope, policy_form: policy_form(document),
+          policy_validation: nil, surface_error: nil)
+      {:error, reason} -> assign(socket, :surface_error, Error.public(reason))
     end
   end
 
@@ -288,7 +357,7 @@ defmodule Veritas.Web.WorkflowLive.Index do
         assign(socket, :workflows, rows)
 
       {:error, reason} ->
-        socket |> assign(:workflows, []) |> put_flash(:error, Error.message(reason))
+        socket |> assign(:workflows, []) |> put_flash(:error, Error.public(reason).message)
     end
   end
 
@@ -595,6 +664,13 @@ defmodule Veritas.Web.WorkflowLive.Index do
                         value={Enum.join(field["options"] || [], ", ")}
                         class="input input-bordered input-sm mt-1 w-full"
                       /></label>
+                      <label :if={@definition["ticket_type"] == "incident"} class="text-xs sm:col-span-2">Semantic Incident binding
+                        <select name={"step[fields][#{i}][binding]"} class="select select-bordered mt-1 w-full">
+                          <option value="">Extension answer only (unbound)</option>
+                          <option :for={binding <- Veritas.Core.Tickets.Incident.fields()} value={binding} selected={field["binding"] == binding}>{binding}</option>
+                        </select>
+                        <span class="block text-[11px] text-base-content/50">Explicit only; never inferred from the label or identifier. Structured bindings use textarea definitions with typed runtime controls.</span>
+                      </label>
                     </div><button
                       type="button"
                       phx-click="remove-field"
@@ -644,6 +720,9 @@ defmodule Veritas.Web.WorkflowLive.Index do
           </form>
         </section>
       </div>
+      <.public_error error={@surface_error} />
+      <.policy_editor :if={@policy_envelope} form={@policy_form} envelope={@policy_envelope}
+        can_edit={@can_edit_policy} validation={@policy_validation} />
     </main>
     """
   end

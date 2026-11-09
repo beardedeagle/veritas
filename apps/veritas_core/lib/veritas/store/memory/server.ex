@@ -67,6 +67,10 @@ defmodule Veritas.Store.Memory.Server do
   def traverse(server, workspace, from, direction, depth, kinds),
     do: GenServer.call(server, {:traverse, workspace, from, direction, depth, kinds})
 
+  @doc "Reads the committed relation rows of one Workspace without fetching endpoints."
+  @spec relations(GenServer.server(), String.t()) :: {:ok, [map()]}
+  def relations(server, workspace), do: GenServer.call(server, {:relations, workspace})
+
   def relation_counts(server, workspace, ids),
     do: GenServer.call(server, {:relation_counts, workspace, ids})
 
@@ -143,6 +147,17 @@ defmodule Veritas.Store.Memory.Server do
   end
 
   @impl true
+  def handle_call({:relations, workspace}, _from, state) do
+    rows =
+      case ws_get(state, workspace, [:relations]) do
+        nil -> []
+        rows -> rows
+      end
+
+    {:reply, {:ok, rows}, state}
+  end
+
+  @impl true
   def handle_call({:relation_counts, workspace, ids}, _from, state) do
     edges = ws_get(state, workspace, [:relations]) || []
 
@@ -189,12 +204,26 @@ defmodule Veritas.Store.Memory.Server do
       |> Enum.map(&ws_get(state, workspace, [:records, :ci, &1]))
       |> Enum.filter(&(&1 && &1["ci_type"] == "service"))
 
+    affected_cis = MapSet.new([ci_id | dependents])
+
+    related_tickets =
+      Enum.reduce(edges, MapSet.new(), fn edge, ids ->
+        if edge["kind"] == "affects" and MapSet.member?(affected_cis, edge["to"]) do
+          MapSet.put(ids, edge["from"])
+        else
+          ids
+        end
+      end)
+
+    # Legacy ticket.ci remains an impact input, not canonical membership.
+    # Filter the ticket rows once so a ticket matched both ways appears once.
     tickets =
       (ws_get(state, workspace, [:records, :ticket]) || %{})
-      |> Enum.filter(fn {_id, ticket} ->
-        ticket["ci"] in dependents or ticket["ci"] == ci_id
-      end)
       |> Map.values()
+      |> Enum.filter(fn ticket ->
+        MapSet.member?(affected_cis, ticket["ci"]) or
+          MapSet.member?(related_tickets, ticket["id"])
+      end)
 
     {:reply, {:ok, %{ci: ci, services: services, tickets: tickets}}, state}
   end
@@ -285,7 +314,17 @@ defmodule Veritas.Store.Memory.Server do
 
   # ── the Workspace's state ─────────────────────────────────────────────────
 
-  defp workspace(state, workspace), do: Map.get(state.workspaces, workspace, %{})
+  defp workspace(state, workspace) do
+    # Only absent Workspaces receive built-ins; existing registries are authoritative.
+    Map.get_lazy(state.workspaces, workspace, fn ->
+      relation_kinds =
+        Map.new(Veritas.Store.Surreal.Schema.relation_kinds(), fn row ->
+          {row["id"], Map.put(row, "workspace", workspace)}
+        end)
+
+      %{relation_kinds: relation_kinds}
+    end)
+  end
 
   defp ws_get(state, workspace, path), do: get_in(workspace(state, workspace), path)
 
@@ -327,8 +366,11 @@ defmodule Veritas.Store.Memory.Server do
     {state, [outbox_row | outbox]}
   end
 
-  defp apply_op({:delete, table, id}, {state, outbox}) do
-    workspace = @default_workspace
+  defp apply_op({:delete, table, id}, acc) do
+    apply_op({:delete, @default_workspace, table, id}, acc)
+  end
+
+  defp apply_op({:delete, workspace, table, id}, {state, outbox}) do
     records = ws_get(state, workspace, [:records]) || %{}
 
     state =
@@ -343,8 +385,11 @@ defmodule Veritas.Store.Memory.Server do
     {ws_append(state, workspace, :relations, [edge]), outbox}
   end
 
-  defp apply_op({:unrelate, kind, from, to}, {state, outbox}) do
-    workspace = @default_workspace
+  defp apply_op({:unrelate, kind, from, to}, acc) do
+    apply_op({:unrelate, @default_workspace, kind, from, to}, acc)
+  end
+
+  defp apply_op({:unrelate, workspace, kind, from, to}, {state, outbox}) do
     relations = ws_get(state, workspace, [:relations]) || []
 
     kept =

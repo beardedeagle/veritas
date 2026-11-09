@@ -5,7 +5,7 @@ defmodule Veritas.Web.WorkflowLive.Intake do
   alias Veritas.Store.Error
 
   def mount(_params, _session, socket),
-    do: {:ok, assign(socket, workflow: nil, intake: nil, error: nil, page_title: "Create ticket")}
+    do: {:ok, assign(socket, workflow: nil, intake: nil, error: nil, surface_error: nil, page_title: "Create ticket")}
 
   def handle_params(%{"id" => id}, _uri, socket) do
     case Workflows.get(socket.assigns.principal_workspace, id, socket.assigns.principal) do
@@ -22,11 +22,13 @@ defmodule Veritas.Web.WorkflowLive.Intake do
         {:noreply, assign(socket, :error, Error.message(:workflow_not_published))}
 
       {:error, reason} ->
-        {:noreply, assign(socket, :error, Error.message(reason))}
+        {:noreply, assign(socket, :error, Error.public(reason).message)}
     end
   end
 
   def handle_event("create", params, socket) do
+    params = params |> Map.put("domain_fields", incident_fields(params))
+      |> Map.put("answers", prepare_answers(socket.assigns.intake, params["answers"] || %{}))
     case Workflows.start(
            socket.assigns.principal_workspace,
            socket.assigns.workflow["id"],
@@ -40,7 +42,7 @@ defmodule Veritas.Web.WorkflowLive.Intake do
          |> push_navigate(to: ~p"/workflows/tickets/#{run["ticket"]}")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, Error.message(reason))}
+        {:noreply, assign(socket, :surface_error, Error.public(reason))}
     end
   end
 
@@ -50,6 +52,7 @@ defmodule Veritas.Web.WorkflowLive.Intake do
     <main class="mx-auto max-w-4xl px-6 py-8">
       <.link navigate={~p"/workflows"} class="text-sm text-base-content/60 hover:text-primary">← Workflows</.link>
       <div :if={@error} role="alert" class="alert alert-error mt-6">{@error}</div>
+      <.public_error error={@surface_error} />
       <div :if={@intake} class="mt-6 grid items-start gap-8 md:grid-cols-[minmax(0,1fr)_220px]">
         <section>
           <p class="text-xs font-semibold uppercase tracking-[0.15em] text-primary">
@@ -72,6 +75,8 @@ defmodule Veritas.Web.WorkflowLive.Intake do
               class="textarea textarea-bordered mt-1.5 w-full"
             /></label>
             <.answer_field :for={field <- @intake["fields"] || []} field={field} />
+            <.incident_controls :if={@definition["ticket_type"] == "incident"}
+              errors={Map.get(@surface_error || %{}, :fields, %{})} />
             <div class="border-t border-base-300 pt-5">
               <button
                 type="submit"

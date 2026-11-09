@@ -7,6 +7,7 @@ defmodule Veritas.Core.Workflows do
   proposals; only an authorized human can complete a step or publish a flow.
   """
   alias Veritas.Core.{Audit, Policy, Principal, Tickets, WorkspaceLock}
+  alias Veritas.Core.Tickets.Incident
   alias Veritas.Store
 
   @kinds ~w(intake manual ai approval)
@@ -144,7 +145,8 @@ defmodule Veritas.Core.Workflows do
     error =
       Enum.find_value(steps, fn step ->
         validate_step_content(step) || validate_step_routes(step, ids, hd(steps)["id"]) ||
-          validate_fields(step["fields"] || [])
+          validate_fields(step["fields"] || []) ||
+          binding_error(step["fields"] || [], definition["ticket_type"])
       end)
 
     reachable = reachable(steps, hd(steps)["id"], MapSet.new())
@@ -200,6 +202,19 @@ defmodule Veritas.Core.Workflows do
 
       true ->
         nil
+    end
+  end
+
+  defp binding_error(fields, type) do
+    if Enum.any?(fields, &(not is_nil(&1["binding"]))) do
+      if type == "incident" do
+        case Incident.validate_bindings(fields) do
+          :ok -> nil
+          {:error, reason} -> reason
+        end
+      else
+        {:invalid_domain_fields, %{"binding" => :unsupported_ticket_type}}
+      end
     end
   end
 
@@ -373,7 +388,7 @@ defmodule Veritas.Core.Workflows do
     with {:ok, workflow} <- get(workspace, id, principal),
          definition when is_map(definition) <-
            workflow["published_definition"] || {:error, :workflow_not_published},
-         :ok <- permit(principal, "ticket:write", workspace, definition["ticket_type"]),
+         :ok <- permit_workflow_write(principal, workspace, definition["ticket_type"]),
          :ok <- require_human(principal),
          true <- text?(attrs["title"]) || {:error, "Give the ticket a title."},
          {:ok, answers} <- answers(hd(definition["steps"]), attrs["answers"] || %{}) do
@@ -418,6 +433,31 @@ defmodule Veritas.Core.Workflows do
     else
       {:error, _} = error -> error
       _ -> {:error, :workflow_not_published}
+    end
+  end
+
+  defp open_ticket(tx, workspace, %{"ticket_type" => "incident"} = definition, attrs, principal) do
+    intake = hd(definition["steps"])
+    with {:ok, values} <- answers(intake, attrs["answers"] || %{}),
+         {:ok, fields} <- Incident.bound_fields(intake, values, Map.get(attrs, "domain_fields", %{})),
+         {:ok, ticket} <- Tickets.open_in_transaction(tx, workspace, "incident",
+           attrs |> Map.put("requester", principal.id) |> Map.put("domain_fields", fields),
+           principal, Principal.audit_actor(principal), []) do
+      case ticket do
+        {:denied, reason} -> {:error, {:intake_denied, reason}}
+        ticket ->
+          if intake["state"] in [nil, "", ticket["state"]] do
+            {:ok, ticket}
+          else
+            case Tickets.transition_in_transaction(tx, workspace, ticket["id"], intake["state"],
+                   principal, Principal.audit_actor(principal),
+                   expected_domain_revision: ticket["domain_revision"], operation: :advance,
+                   reason: "Workflow intake: #{intake["name"]}") do
+              {:ok, {:denied, reason}} -> {:error, {:intake_denied, reason}}
+              result -> result
+            end
+          end
+      end
     end
   end
 
@@ -549,9 +589,10 @@ defmodule Veritas.Core.Workflows do
           {:ok, map()} | {:error, term()}
   def complete(workspace, ticket_id, values, principal, opts \\ []) do
     with {:ok, loaded} <- run(workspace, ticket_id, principal),
-         :ok <- permit(principal, "ticket:write", workspace, loaded["definition"]["ticket_type"]),
+         :ok <- permit_workflow_write(principal, workspace, loaded["definition"]["ticket_type"]),
          :ok <- require_human(principal) do
       write(workspace, fn tx ->
+        opts = Keyword.put(opts, :transaction_time, DateTime.utc_now())
         with {:ok, row} <- fetch(tx, :workflow_run, ticket_id),
              :ok <- revision(row, opts[:expected_revision]),
              %{} = step <- current_step(row) || {:error, :workflow_completed},
@@ -559,7 +600,7 @@ defmodule Veritas.Core.Workflows do
              :ok <- require_draft(row, step),
              :ok <- require_approval(step, principal, opts),
              {:ok, next} <- destination(step, opts[:next]),
-             {:ok, moved} <- move_ticket(tx, workspace, row, step, principal) do
+             {:ok, moved} <- move_ticket(tx, workspace, row, step, principal, values, opts) do
           case moved do
             {:denied, _} = denied ->
               {:ok, denied}
@@ -570,6 +611,8 @@ defmodule Veritas.Core.Workflows do
                 |> Map.put("current_step", next || "")
                 |> Map.update!("answers", &Map.put(&1, step["id"], values))
                 |> Map.update!("completed_steps", &(&1 ++ [step["id"]]))
+                |> domain_submission(if(row["definition"]["ticket_type"] == "incident", do: Keyword.get(opts, :domain_fields, %{}), else: %{}), principal,
+                  row["revision"], moved["domain_revision"], opts[:transaction_time])
 
               updated =
                 Map.merge(row, %{
@@ -602,6 +645,52 @@ defmodule Veritas.Core.Workflows do
         end
       end)
     end
+  end
+
+  @doc """
+  Corrects an active Incident run without advancing or accepting AI output.
+
+  Requires independent `:expected_revision` and `:expected_domain_revision`.
+  The returned run adds readonly `domain_revision` and `domain_ticket` metadata;
+  neither is stored in the workflow row. Current step, answers, completed visits,
+  pinned definition and approved outputs remain byte-for-byte unchanged.
+  """
+  @spec update_domain(Store.workspace(), Store.record_id(), map(), Principal.t() | nil, keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def update_domain(workspace, ticket_id, fields, principal, opts) do
+    write(workspace, fn tx ->
+      with {:ok, row} <- fetch(tx, :workflow_run, ticket_id),
+           true <- row["definition"]["ticket_type"] == "incident" || {:error, :not_found},
+           true <- row["status"] == "active" || {:error, :workflow_completed},
+           :ok <- revision(row, opts[:expected_revision]),
+           {:ok, ticket} <- Tickets.update_domain_in_transaction(tx, workspace, ticket_id, fields, principal,
+             opts |> Keyword.put(:operation, :amend) |> Keyword.delete(:to_state)) do
+        case ticket do
+          {:denied, _} = denied -> {:ok, denied}
+          ticket ->
+            now = DateTime.utc_now()
+            data = domain_submission(row["data"], fields, principal, row["revision"], ticket["domain_revision"], now)
+            updated = Map.merge(row, %{"data" => data, "revision" => row["revision"] + 1, "updated_at" => now})
+            actor = opts[:audit_actor] || Principal.audit_actor(principal)
+            with {:ok, _} <- Store.put(tx, :workflow_run, updated),
+                 {:ok, _} <- Audit.append(tx, workspace, %{subject: row["id"], subject_table: "workflow_run",
+                   actor: actor, from_state: row["status"], to_state: row["status"],
+                   reason: "Incident facts corrected without workflow advancement", correlation_id: opts[:correlation_id],
+                   diff: %{"domain_fields" => fields, "domain_revision" => ticket["domain_revision"],
+                     "run_revision" => updated["revision"], "current_step" => row["data"]["current_step"]}}) do
+              {:ok, updated |> Map.put("domain_revision", ticket["domain_revision"]) |> Map.put("domain_ticket", ticket)}
+            end
+        end
+      end
+    end)
+  end
+
+  defp domain_submission(data, fields, _principal, _run_revision, _domain_revision, _now) when map_size(fields) == 0, do: data
+  defp domain_submission(data, fields, principal, run_revision, domain_revision, now) do
+    entry = %{"fields" => fields, "actor" => %{"id" => principal.id, "kind" => to_string(principal.kind)},
+      "recorded_at" => DateTime.to_iso8601(now), "run_revision" => run_revision,
+      "domain_revision" => domain_revision}
+    Map.update(data, "domain_submissions", [entry], &(&1 ++ [entry]))
   end
 
   @doc """
@@ -801,16 +890,28 @@ defmodule Veritas.Core.Workflows do
 
   defp decode_definition(_), do: {:error, "The model returned no workflow."}
 
-  defp move_ticket(tx, workspace, run, step, principal) do
+  defp move_ticket(tx, workspace, run, step, principal, values \\ %{}, opts \\ []) do
     state = step["state"]
 
     with {:ok, ticket} <- fetch(tx, :ticket, run["ticket"]) do
-      if state in [nil, "", ticket["state"]],
-        do: {:ok, ticket},
-        else:
+      if ticket["ticket_type"] == "incident" do
+        with {:ok, fields} <- Incident.bound_fields(step, values, Keyword.get(opts, :domain_fields, %{})) do
+          state = if state in [nil, ""], do: ticket["state"], else: state
+          domain_opts = opts |> Keyword.put(:domain_fields, fields)
+            |> Keyword.put(:operation, :advance)
+            |> Keyword.put(:workflow_visit, length(run["data"]["completed_steps"]))
+            |> Keyword.put(:reason, "Workflow step: #{step["name"]}")
           Tickets.transition_in_transaction(tx, workspace, run["ticket"], state, principal,
-            reason: "Workflow step: #{step["name"]}"
-          )
+            Principal.audit_actor(principal), domain_opts)
+        end
+      else
+        if state in [nil, "", ticket["state"]],
+          do: {:ok, ticket},
+          else:
+            Tickets.transition_in_transaction(tx, workspace, run["ticket"], state, principal,
+              reason: "Workflow step: #{step["name"]}"
+            )
+      end
     end
   end
 
@@ -855,7 +956,7 @@ defmodule Veritas.Core.Workflows do
           required and missing_answer?(f, v) ->
             {:halt, {:error, "#{f["label"]} is required."}}
 
-          not valid_answer?(f, v) ->
+          not valid_field_answer?(f, v) ->
             {:halt, {:error, "#{f["label"]} has an invalid value."}}
 
           true ->
@@ -878,6 +979,13 @@ defmodule Veritas.Core.Workflows do
   defp missing_answer?(_, value),
     do: is_nil(value) or (is_binary(value) and String.trim(value) == "")
 
+  defp valid_field_answer?(%{"binding" => binding} = field, value) when not is_nil(binding) do
+    is_nil(value) or value == "" or
+      (match?({:ok, _}, Incident.normalize(%{binding => value})) and
+        (Incident.binding_type(binding) in [:object, :array] or valid_answer?(field, value)))
+  end
+  defp valid_field_answer?(field, value), do: valid_answer?(field, value)
+
   defp valid_answer?(%{"type" => "checkbox"}, value),
     do: value in [true, false, "true", "false", "on", nil]
 
@@ -893,6 +1001,11 @@ defmodule Veritas.Core.Workflows do
     do: value in (field["options"] || []) or value in [nil, ""]
 
   defp valid_answer?(_, value), do: is_binary(value) or is_nil(value)
+
+  # Incident write authority is checked against persisted facts inside Tickets;
+  # the generic R/A preflight would incorrectly reject an authorized assignee.
+  defp permit_workflow_write(_principal, _workspace, "incident"), do: :ok
+  defp permit_workflow_write(principal, workspace, type), do: permit(principal, "ticket:write", workspace, type)
 
   defp permit(principal, capability, workspace, type \\ nil) do
     case Policy.authorize(principal, capability, %{workspace: workspace, ticket_type: type}) do

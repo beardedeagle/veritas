@@ -58,41 +58,92 @@
     </Veritas.Web.ShellComponents.shell>
 
     <script>
-      // The command palette. The disclosure itself is a <details> element and
-      // opens with the keyboard and with no script at all; this only adds the
-      // shortcut and the filter.
+      (() => {
+        const toggle = document.getElementById("veritas-rail-toggle");
+        if (!toggle) return;
+
+        const key = "veritas:rail-collapsed";
+        const setCollapsed = (collapsed) => {
+          document.documentElement.dataset.railCollapsed = String(collapsed);
+          toggle.setAttribute("aria-expanded", String(!collapsed));
+          toggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+          toggle.title = collapsed ? "Expand sidebar" : "Collapse sidebar";
+        };
+
+        let preference;
+        try { preference = localStorage.getItem(key); } catch {}
+        setCollapsed(preference === "true" || (preference !== "false" && matchMedia("(max-width: 900px)").matches));
+
+        toggle.addEventListener("click", () => {
+          const collapsed = document.documentElement.dataset.railCollapsed !== "true";
+          setCollapsed(collapsed);
+          try { localStorage.setItem(key, String(collapsed)); } catch {}
+        });
+      })();
+    </script>
+
+    <script>
       (() => {
         const palette = document.getElementById("v-command-palette");
         if (!palette) return;
 
         const input = document.getElementById("v-command-input");
+        const results = document.getElementById("v-command-results");
         const items = Array.from(palette.querySelectorAll("[data-command]"));
+        let matches = [];
 
         const setOpen = (open) => {
-          palette.open = open;
-          if (open && input) input.focus();
+          results.hidden = !open;
+          input.setAttribute("aria-expanded", String(open));
         };
 
         document.addEventListener("keydown", (event) => {
           if ((event.metaKey || event.ctrlKey) && (event.key === "k" || event.key === "K")) {
             event.preventDefault();
-            setOpen(!palette.open);
+            input.focus();
+            input.select();
+            setOpen(true);
             return;
           }
-          if (event.key === "Escape" && palette.open) {
+          if (event.key === "Escape" && !results.hidden) {
+            event.preventDefault();
+            input.focus();
             setOpen(false);
           }
         });
 
-        if (input) {
-          input.addEventListener("input", () => {
-            const needle = (input.value || "").trim().toLowerCase();
-            items.forEach((item) => {
-              const haystack = ((item.dataset.command || "") + " " + item.textContent).toLowerCase();
-              item.hidden = needle.length > 0 && !haystack.includes(needle);
-            });
+        input.addEventListener("input", () => {
+          const needle = input.value.trim().toLowerCase();
+          matches = items.filter((item) => {
+            const haystack = ((item.dataset.command || "") + " " + item.textContent).toLowerCase();
+            return needle.length > 0 && haystack.includes(needle);
           });
-        }
+          items.forEach((item) => {
+            item.hidden = matches.length > 0 && !matches.includes(item);
+          });
+          setOpen(true);
+        });
+
+        input.addEventListener("focus", () => setOpen(true));
+        input.addEventListener("click", () => setOpen(true));
+        input.addEventListener("keydown", (event) => {
+          const first = (event.key === "Enter" ? matches[0] : items.find((item) => !item.hidden))?.querySelector("a");
+          if (first && (event.key === "Enter" || event.key === "ArrowDown")) {
+            event.preventDefault();
+            if (event.key === "Enter") first.click();
+            else {
+              setOpen(true);
+              first.focus();
+            }
+          }
+        });
+
+        document.addEventListener("pointerdown", (event) => {
+          if (!palette.contains(event.target)) setOpen(false);
+        });
+        palette.addEventListener("focusout", (event) => {
+          if (!palette.contains(event.relatedTarget)) setOpen(false);
+        });
 
         items.forEach((item) => item.addEventListener("click", () => setOpen(false)));
       })();

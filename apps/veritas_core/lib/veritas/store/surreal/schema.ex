@@ -19,19 +19,13 @@ defmodule Veritas.Store.Surreal.Schema do
 
   ## The schema is data
 
-  The tables are declared as data, not as a wall of SurrealQL, for one
-  reason: a migration has to know what the schema *should* be so it can
-  reconcile what it *is*. A field that an earlier version declared and this
-  version does not is removed by the migration, rather than sitting in the
-  table as a field the new code never writes and the store keeps coercing
-  on every write.
-
-  The statements are idempotent — every `DEFINE` uses `OVERWRITE` and every
-  seed row is an `UPSERT` — so the migrator can be re-run against a migrated
-  Workspace.
+  Tables are data so migrations can inspect the required declarations. The
+  v6 Incident migration adds only its owned declarations; it never reconciles,
+  prunes or reseeds existing rows. The complete statements and seeds are for
+  an explicitly empty Workspace, not an upgrade shortcut.
   """
 
-  @version "5"
+  @version "6"
 
   @doc "The schema version this Adapter expects."
   @spec version() :: String.t()
@@ -42,6 +36,146 @@ defmodule Veritas.Store.Surreal.Schema do
   def engine_version, do: "3.3.4"
 
   # ── the tables ────────────────────────────────────────────────────────────
+
+  # Optional canonical facts never reinterpret the legacy envelope/category.
+  # Writers supply revisions, evidence and event times explicitly.
+  @incident_fields [
+    %{name: "domain_revision", type: "int | NONE", default: "NONE", assert: "$value IS NONE OR $value > 0"},
+    %{name: "impact_level", type: "string | NONE", default: "NONE", assert: "$value IS NONE OR $value IN ['individual','team','department','organization','business_critical']"},
+    %{name: "urgency_level", type: "string | NONE", default: "NONE", assert: "$value IS NONE OR $value IN ['immediate','high','medium','low']"},
+    %{name: "severity_level", type: "string | NONE", default: "NONE", assert: "$value IS NONE OR $value IN ['critical','major','minor','indeterminate']"},
+    %{name: "classification", type: "string | NONE", default: "NONE", assert: "$value IS NONE OR $value IN ['major','minor']"},
+    %{name: "priority_justification", type: "string | NONE", default: "NONE"},
+    %{name: "priority_policy_version", type: "record<incident_policy_version> | NONE", ref: "incident_policy_version", default: "NONE"},
+    %{name: "priority_override_evidence", type: "object | NONE", flexible: true, default: "NONE"},
+    %{name: "domain_provenance", type: "object | NONE", flexible: true, default: "NONE"},
+    %{name: "track_plan", type: "object | NONE", flexible: true, default: "NONE"},
+    %{name: "restoration_evidence", type: "object | NONE", flexible: true, default: "NONE"},
+    %{name: "hold_reason", type: "string | NONE", default: "NONE"},
+    %{name: "hold_owner", type: "record<user> | NONE", ref: "user", default: "NONE"},
+    %{name: "expected_resume_at", type: "datetime | NONE", default: "NONE"},
+    %{name: "resume_evidence", type: "object | NONE", flexible: true, default: "NONE"},
+    %{name: "problem", type: "record<ticket> | NONE", ref: "ticket", default: "NONE"},
+    %{name: "notification_evidence", type: "object | NONE", flexible: true, default: "NONE"},
+    %{name: "confirmation_evidence", type: "object | NONE", flexible: true, default: "NONE"},
+    %{name: "response_evidence", type: "object | NONE", flexible: true, default: "NONE"},
+    %{name: "closure_approval", type: "object | NONE", flexible: true, default: "NONE"},
+    %{name: "cancellation_reason", type: "string | NONE", default: "NONE"},
+    %{name: "workaround", type: "object | NONE", flexible: true, default: "NONE"}
+  ]
+
+  # A published version is immutable at the domain boundary; drafts are never
+  # used as clock bindings. No policy, calendar or counter value is seeded.
+  @incident_tables [
+    %{
+      name: "sla_clock",
+      fields: [
+        %{name: "workspace", type: "record<workspace>", ref: "workspace"},
+        %{name: "ticket", type: "record<ticket>", ref: "ticket"},
+        %{name: "kind", type: "string", assert: "$value IN ['response','resolution']"},
+        %{
+          name: "priority",
+          type: "string | NONE",
+          default: "NONE",
+          assert: "$value IS NONE OR $value IN ['P1','P2','P3','P4']"
+        },
+        %{name: "cycle", type: "int", assert: "$value > 0"},
+        %{
+          name: "carried_elapsed_us",
+          type: "int | NONE",
+          default: "NONE",
+          assert: "$value IS NONE OR $value >= 0"
+        },
+        %{
+          name: "previous_cycle",
+          type: "record<sla_clock> | NONE",
+          ref: "sla_clock",
+          default: "NONE"
+        },
+        %{
+          name: "reopen_mode",
+          type: "string | NONE",
+          default: "NONE",
+          assert: "$value IS NONE OR $value IN ['cumulative','new_cycle']"
+        },
+        %{name: "domain_revision", type: "int", assert: "$value > 0"},
+        %{name: "history_complete", type: "bool"},
+        %{name: "started_at", type: "datetime | NONE", default: "NONE"},
+        %{name: "stopped_at", type: "datetime | NONE", default: "NONE"},
+        %{name: "qualified_pause_us", type: "int | NONE", default: "NONE", assert: "$value IS NONE OR $value >= 0"},
+        %{name: "current_hold", type: "record<incident_hold_episode> | NONE", ref: "incident_hold_episode", default: "NONE"},
+        %{name: "policy_version", type: "record<incident_policy_version> | NONE", ref: "incident_policy_version", default: "NONE"},
+        %{name: "calendar_version", type: "record<incident_calendar_version> | NONE", ref: "incident_calendar_version", default: "NONE"}
+      ],
+      indexes: [{"sla_clock_cycle", "workspace, ticket, kind, cycle", unique: true}]
+    },
+    %{
+      name: "incident_hold_episode",
+      fields: [
+        %{name: "workspace", type: "record<workspace>", ref: "workspace"},
+        %{name: "clock", type: "record<sla_clock>", ref: "sla_clock"},
+        %{name: "episode", type: "int", assert: "$value > 0"},
+        %{name: "domain_revision", type: "int", assert: "$value > 0"},
+        %{name: "reason", type: "string | NONE", default: "NONE"},
+        %{name: "started_at", type: "datetime | NONE", default: "NONE"},
+        %{name: "ended_at", type: "datetime | NONE", default: "NONE"},
+        %{name: "expected_resume_at", type: "datetime | NONE", default: "NONE"},
+        %{name: "pause_cap_at", type: "datetime | NONE", default: "NONE"},
+        %{name: "qualified_pause_us", type: "int | NONE", default: "NONE", assert: "$value IS NONE OR $value >= 0"},
+        %{name: "evidence", type: "object | NONE", flexible: true, default: "NONE"}
+      ],
+      indexes: [{"incident_hold_clock_episode", "workspace, clock, episode", unique: true}]
+    },
+    %{
+      name: "incident_policy_version",
+      fields: [
+        %{name: "workspace", type: "record<workspace>", ref: "workspace"},
+        %{name: "policy_key", type: "string"},
+        %{name: "version", type: "int", assert: "$value > 0"},
+        %{name: "schema_version", type: "int", assert: "$value > 0"},
+        %{name: "revision", type: "int", assert: "$value > 0"},
+        %{name: "status", type: "string", assert: "$value IN ['draft','published']"},
+        %{name: "definition", type: "object", flexible: true},
+        %{name: "created_at", type: "datetime"},
+        %{name: "created_by", type: "object", flexible: true},
+        %{name: "published_at", type: "datetime | NONE", default: "NONE"},
+        %{name: "published_by", type: "object | NONE", flexible: true, default: "NONE"},
+        %{name: "calendar_version", type: "record<incident_calendar_version> | NONE", ref: "incident_calendar_version", default: "NONE"}
+      ],
+      indexes: [{"incident_policy_key_version", "workspace, policy_key, version", unique: true}]
+    },
+    %{
+      name: "incident_calendar_version",
+      fields: [
+        %{name: "workspace", type: "record<workspace>", ref: "workspace"},
+        %{name: "calendar_key", type: "string"},
+        %{name: "version", type: "int", assert: "$value > 0"},
+        %{name: "schema_version", type: "int", assert: "$value > 0"},
+        %{name: "revision", type: "int", assert: "$value > 0"},
+        %{name: "status", type: "string", assert: "$value IN ['draft','published']"},
+        %{name: "timezone", type: "string | NONE", default: "NONE"},
+        %{name: "timezone_rules_version", type: "string | NONE", default: "NONE"},
+        %{name: "definition", type: "object", flexible: true},
+        %{name: "created_at", type: "datetime"},
+        %{name: "created_by", type: "object", flexible: true},
+        %{name: "published_at", type: "datetime | NONE", default: "NONE"},
+        %{name: "published_by", type: "object | NONE", flexible: true, default: "NONE"}
+      ],
+      indexes: [{"incident_calendar_key_version", "workspace, calendar_key, version", unique: true}]
+    },
+    %{
+      name: "incident_configuration",
+      fields: [
+        %{name: "workspace", type: "record<workspace>", ref: "workspace", assert: "$this.id = type::record('incident_configuration', 'current')"},
+        %{name: "revision", type: "int", assert: "$value > 0"},
+        %{name: "draft", type: "object | NONE", flexible: true, default: "NONE"},
+        %{name: "updated_at", type: "datetime"},
+        %{name: "updated_by", type: "object", flexible: true},
+        %{name: "active_policy_version", type: "record<incident_policy_version> | NONE", ref: "incident_policy_version", default: "NONE"}
+      ],
+      indexes: [{"incident_configuration_workspace", "workspace", unique: true}]
+    }
+  ]
 
   @tables [
     %{
@@ -290,9 +424,10 @@ defmodule Veritas.Store.Surreal.Schema do
         %{name: "assignee", type: "record<user> | NONE", ref: "user", default: "NONE"},
         %{
           name: "priority",
-          type: "string",
-          default: "'medium'",
-          assert: "$value IN ['low','medium','high','urgent']"
+          type: "string | NONE",
+          default: "IF $this.ticket_type = 'incident' { NONE } ELSE { 'medium' }",
+          assert:
+            "($this.ticket_type = 'incident' AND $value IS NONE) OR $value IN ['low','medium','high','urgent']"
         },
         %{
           name: "impact",
@@ -341,7 +476,7 @@ defmodule Veritas.Store.Surreal.Schema do
         %{name: "resolution_code", type: "string | NONE", default: "NONE"},
         %{name: "major", type: "bool", default: "false"},
         %{name: "promoted_to", type: "string | NONE", default: "NONE"}
-      ],
+      ] ++ @incident_fields,
       indexes: [
         {"incident_ticket", "ticket_id", unique: true}
       ]
@@ -501,7 +636,7 @@ defmodule Veritas.Store.Surreal.Schema do
         %{name: "applied_at", type: "datetime"}
       ]
     }
-  ]
+  ] ++ @incident_tables
 
   @doc "The tables the schema declares, with their fields."
   @spec tables() :: [map()]
@@ -853,36 +988,61 @@ defmodule Veritas.Store.Surreal.Schema do
   end
 
   defp table_statements(table) do
-    fields =
-      Enum.map_join(table.fields, "\n", fn field ->
-        definition =
-          "DEFINE FIELD OVERWRITE #{field.name} ON #{table.name} TYPE #{field.type}"
+    definition = definition(table)
 
-        definition =
-          if field[:flexible], do: definition <> " FLEXIBLE", else: definition
+    fields = Enum.map(table.fields, &Map.fetch!(definition.fields, &1.name))
+    indexes = Enum.map(table[:indexes] || [], fn {name, _, _} -> Map.fetch!(definition.indexes, name) end)
+    Enum.join([definition.table | fields ++ indexes], "\n")
+  end
 
-        definition =
-          if field[:default], do: definition <> " DEFAULT #{field.default}", else: definition
+  @doc false
+  @spec definitions() :: %{String.t() => map()}
+  def definitions, do: Map.new(@tables, &{&1.name, definition(&1)})
 
-        definition =
-          if field[:assert], do: definition <> " ASSERT #{field.assert}", else: definition
+  @doc false
+  @spec incident_definitions() :: %{String.t() => map()}
+  def incident_definitions do
+    priority = Enum.find(Enum.find(@tables, &(&1.name == "ticket")).fields, &(&1.name == "priority"))
 
-        definition <> ";"
-      end)
+    Map.new(
+      [%{name: "ticket", fields: [priority]}, %{name: "incident", fields: @incident_fields}] ++
+        @incident_tables,
+      &{&1.name, definition(&1)}
+    )
+  end
 
-    indexes =
-      Enum.map_join(table[:indexes] || [], "\n", fn {name, columns, opts} ->
-        unique = if opts[:unique], do: " UNIQUE", else: ""
-        fulltext = if opts[:fulltext], do: " FULLTEXT", else: ""
+  @doc false
+  @spec v5_priority_definition() :: String.t()
+  def v5_priority_definition do
+    field_definition("ticket", %{
+      name: "priority",
+      type: "string",
+      default: "'medium'",
+      assert: "$value IN ['low','medium','high','urgent']"
+    })
+  end
 
-        "DEFINE INDEX OVERWRITE #{name} ON #{table.name} FIELDS #{columns}#{fulltext}#{unique};"
-      end)
+  defp definition(table) do
+    %{
+      table: table_definition(table),
+      fields: Map.new(table.fields, &{&1.name, field_definition(table.name, &1)}),
+      indexes:
+        Map.new(table[:indexes] || [], fn {name, columns, opts} ->
+          unique = if opts[:unique], do: " UNIQUE", else: ""
+          fulltext = if opts[:fulltext], do: " FULLTEXT", else: ""
 
-    """
-    #{table_definition(table)}
-    #{fields}
-    #{indexes}
-    """
+          {name,
+           "DEFINE INDEX OVERWRITE #{name} ON #{table.name} FIELDS #{columns}#{fulltext}#{unique};"}
+        end)
+    }
+  end
+
+  defp field_definition(table, field) do
+    definition = "DEFINE FIELD OVERWRITE #{field.name} ON #{table} TYPE #{field.type}"
+    definition = if field[:flexible], do: definition <> " FLEXIBLE", else: definition
+    definition = if field[:default], do: definition <> " DEFAULT #{field.default}", else: definition
+    definition = if field[:assert], do: definition <> " ASSERT #{field.assert}", else: definition
+    definition <> ";"
   end
 
   # `SCHEMAFULL` is a modifier, not a type: an ordinary table is declared

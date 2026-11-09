@@ -114,6 +114,10 @@ XX*
 # and it is pinned by digest rather than committed.
 vendor/
 rel/overlays/vendor/
+!apps/veritas_web/assets/vendor/
+apps/veritas_web/assets/vendor/*
+!apps/veritas_web/assets/vendor/heroicons.js
+!apps/veritas_web/assets/vendor/topbar.js
 
 # An Erlang crash dump. The BEAM writes one into its working directory when
 # it dies, and a Plugin's working directory is the host's — which is the

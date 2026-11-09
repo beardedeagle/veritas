@@ -46,6 +46,34 @@ defmodule Veritas.Web.ShellTest do
   ]
 
   describe "the navigation rail" do
+    test "header search is editable above its results with no second input", %{conn: conn} do
+      html = conn |> get("/incidents") |> html_response(200) |> LazyHTML.from_document()
+
+      assert html
+             |> LazyHTML.query("#veritas-topbar #v-command-input[type=search]")
+             |> Enum.count() ==
+               1
+
+      assert html |> LazyHTML.query("#v-command-palette input") |> Enum.count() == 1
+      assert html |> LazyHTML.query("#v-command-results input") |> Enum.empty?()
+
+      assert html
+             |> LazyHTML.query("#v-command-results[hidden] a[href='/incidents']")
+             |> Enum.count() == 1
+    end
+
+    test "every section keeps the brand and the bottom sidebar toggle", %{conn: conn} do
+      for {_label, path} <- @sections do
+        html = conn |> get(path) |> html_response(200)
+        assert html =~ ~s(id="veritas-rail-toggle")
+        assert html =~ ~s(aria-controls="veritas-rail-links")
+        assert html =~ ~s(aria-label="Collapse sidebar")
+        assert html =~ ~s(aria-label="Veritas, overview")
+        assert html =~ ~s(src="/images/veritas-icon.svg")
+        assert html =~ "veritas:rail-collapsed"
+      end
+    end
+
     test "shows every section of the corpus, and links it to the right route", %{
       conn: conn,
       workspace: workspace

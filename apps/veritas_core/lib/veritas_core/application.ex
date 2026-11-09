@@ -38,6 +38,7 @@ defmodule Veritas.Core.Application do
     # that a migration can give a legacy row a chain identity through the
     # seam instead of inventing one.
     :ok = Veritas.Store.Chain.register(&Veritas.Core.Audit.reconcile_chain/1)
+    :ok = Veritas.Store.Chain.register_verifier(&Veritas.Core.Audit.verify_rows/2)
 
     # The chain is **signed** with a key the host holds and the store never
     # sees. A deployment with no key is a deployment whose Audit Log can be

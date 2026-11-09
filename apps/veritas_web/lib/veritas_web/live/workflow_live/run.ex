@@ -15,7 +15,9 @@ defmodule Veritas.Web.WorkflowLive.Run do
          step: nil,
          busy: false,
          models: [],
-         error: nil
+         error: nil,
+         domain_view: nil,
+         surface_error: nil
        )}
 
   def handle_params(%{"ticket_id" => id}, _uri, socket), do: {:noreply, load(socket, id)}
@@ -24,13 +26,17 @@ defmodule Veritas.Web.WorkflowLive.Run do
     run = socket.assigns.run
     %{principal_workspace: workspace, principal: principal} = socket.assigns
 
-    opts = [
-      expected_revision: run["revision"],
-      next: present(params["next"]),
-      approve: params["approved"] == "true"
-    ]
+    opts =
+      domain_opts(socket) ++
+        [
+          next: present(params["next"]),
+          approve: params["approved"] == "true",
+          domain_fields: incident_fields(params)
+        ]
 
-    case Workflows.complete(workspace, run["ticket"], params["answers"] || %{}, principal, opts) do
+    answers = prepare_answers(socket.assigns.step, params["answers"] || %{})
+
+    case Workflows.complete(workspace, run["ticket"], answers, principal, opts) do
       {:ok, updated} ->
         completed = updated["status"] == "completed"
 
@@ -42,9 +48,34 @@ defmodule Veritas.Web.WorkflowLive.Run do
         {:noreply, socket |> load(updated["ticket"]) |> put_flash(:info, message)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, Error.message(reason))}
+        {:noreply, assign(socket, :surface_error, Error.public(reason))}
     end
   end
+
+  def handle_event("correct-domain", params, socket) do
+    case Tickets.update_domain(
+           socket.assigns.principal_workspace,
+           socket.assigns.run["ticket"],
+           incident_fields(params),
+           socket.assigns.principal,
+           domain_opts(socket)
+         ) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> load(socket.assigns.run["ticket"])
+         |> put_flash(
+           :info,
+           "Facts corrected without advancing, changing answers or approving AI."
+         )}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :surface_error, Error.public(reason))}
+    end
+  end
+
+  def handle_event("reload-domain", _, socket),
+    do: {:noreply, load(socket, socket.assigns.run["ticket"])}
 
   def handle_event("draft", _, %{assigns: %{busy: true}} = socket), do: {:noreply, socket}
 
@@ -83,7 +114,9 @@ defmodule Veritas.Web.WorkflowLive.Run do
   end
 
   def handle_async(_name, {:ok, {:error, reason}}, socket),
-    do: {:noreply, socket |> assign(:busy, false) |> put_flash(:error, Error.message(reason))}
+    do:
+      {:noreply,
+       socket |> assign(:busy, false) |> put_flash(:error, Error.public(reason).message)}
 
   def handle_async(_name, {:exit, _reason}, socket),
     do:
@@ -93,14 +126,58 @@ defmodule Veritas.Web.WorkflowLive.Run do
        |> put_flash(:error, "The AI request stopped. Ticket progress is unchanged; try again.")}
 
   defp load(socket, id) do
-    with {:ok, run} <-
+    with {:ok, view} <- read_incident(socket, id),
+         {:ok, run} <-
            Workflows.run(socket.assigns.principal_workspace, id, socket.assigns.principal),
          {:ok, ticket} <- Tickets.read(socket.assigns.principal_workspace, id) do
-      assign(socket, run: run, ticket: ticket, step: Workflows.current_step(run), error: nil)
+      assign(socket,
+        run: run,
+        ticket: ticket,
+        step: Workflows.current_step(run),
+        domain_view: view,
+        surface_error: nil,
+        error: nil
+      )
     else
-      {:error, reason} -> assign(socket, :error, Error.message(reason))
+      {:error, reason} ->
+        assign(socket,
+          run: nil,
+          ticket: nil,
+          step: nil,
+          domain_view: nil,
+          surface_error: Error.public(reason),
+          error: nil
+        )
     end
   end
+
+  defp read_incident(socket, id) do
+    case Tickets.read_domain(socket.assigns.principal_workspace, id, socket.assigns.principal) do
+      {:error, :not_found} -> {:ok, nil}
+      result -> result
+    end
+  end
+
+  defp domain_opts(socket) do
+    opts = [expected_revision: socket.assigns.run["revision"]]
+
+    case socket.assigns.domain_view do
+      nil ->
+        opts
+
+      view ->
+        opts ++
+          [
+            expected_domain_revision: view.domain_revision,
+            expected_policy_version: view.policy.active_version
+          ]
+    end
+  end
+
+  defp recorded_answer(value) when is_map(value) or is_list(value),
+    do: Jason.encode!(value, pretty: true)
+
+  defp recorded_answer(value), do: to_string(value || "—")
 
   defp present(v) when v in [nil, ""], do: nil
   defp present(v), do: v
@@ -125,6 +202,7 @@ defmodule Veritas.Web.WorkflowLive.Run do
     <main class="mx-auto max-w-6xl px-6 py-8">
       <.link navigate={~p"/workflows"} class="text-sm text-base-content/60 hover:text-primary">← Workflows</.link>
       <p :if={@error} role="alert" class="alert alert-error mt-6">{@error}</p>
+      <.public_error error={@surface_error} />
       <div :if={@run && @ticket}>
         <header class="my-6">
           <div class="mb-2 flex flex-wrap items-center gap-2">
@@ -135,7 +213,11 @@ defmodule Veritas.Web.WorkflowLive.Run do
             ]}</span>
           </div><h1 class="text-3xl font-semibold tracking-tight">{@ticket["title"]}</h1><p class="mt-2 text-sm text-base-content/60">
             {@ticket["description"]}
-          </p><p class="mt-2 font-mono text-[10px] text-base-content/40">{@ticket["id"]}</p>
+          </p><p class="mt-2 font-mono text-[10px] text-base-content/40">
+            <a href={~p"/#{Tickets.reference(@ticket)}"} class="hover:underline">{Tickets.reference(
+              @ticket
+            )}</a>
+          </p>
         </header>
         <div class="grid items-start gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
           <aside>
@@ -146,6 +228,26 @@ defmodule Veritas.Web.WorkflowLive.Run do
             /><.link navigate={~p"/audit"} class="mt-4 block text-center text-xs text-primary">View the audit trail →</.link>
           </aside>
           <div class="min-w-0 space-y-5">
+            <.incident_readback :if={@domain_view} view={@domain_view} />
+            <form
+              :if={@domain_view}
+              id="workflow-domain-correction"
+              phx-submit="correct-domain"
+              class="v-panel space-y-3 rounded-xl p-5"
+            >
+              <h2 class="font-semibold">Correct Incident facts without completing this step</h2>
+              <.incident_controls errors={Map.get(@surface_error || %{}, :fields, %{})} />
+              <button type="submit" class="btn btn-outline">Save selected facts only</button>
+              <p class="text-xs text-base-content/60">
+                Uses independent workflow and Incident revisions. The pinned definition, answers and approved outputs stay intact.
+              </p>
+              <button
+                type="button"
+                phx-click="reload-domain"
+                data-confirm="Reload current run and Incident revisions? Unsaved fields may be discarded."
+                class="btn btn-ghost btn-sm"
+              >Reload readback</button>
+            </form>
             <section :if={@step} class="v-panel rounded-xl p-6">
               <p class="text-xs font-semibold uppercase tracking-[0.12em] text-primary">
                 Current step · {String.replace(@step["phase"], "_", " ")}
@@ -201,6 +303,10 @@ defmodule Veritas.Web.WorkflowLive.Run do
                 class="mt-6 space-y-4 border-t border-base-300 pt-5"
               >
                 <.answer_field :for={field <- @step["fields"] || []} field={field} />
+                <.incident_controls
+                  :if={@domain_view}
+                  errors={Map.get(@surface_error || %{}, :fields, %{})}
+                />
                 <label :if={length(@step["next"]) > 1} class="block text-sm font-medium">Route to<select
                   name="next"
                   required
@@ -264,7 +370,7 @@ defmodule Veritas.Web.WorkflowLive.Run do
                 <h3 class="text-sm font-semibold">✓ {step["name"]}</h3><dl class="mt-2 space-y-2">
                   <div :for={field <- step["fields"] || []}>
                     <dt class="text-xs text-base-content/50">{field["label"]}</dt><dd class="mt-1 whitespace-pre-wrap text-sm">
-                      {to_string(get_in(@run, ["data", "answers", step["id"], field["key"]]) || "—")}
+                      {recorded_answer(get_in(@run, ["data", "answers", step["id"], field["key"]]))}
                     </dd>
                   </div>
                 </dl><details

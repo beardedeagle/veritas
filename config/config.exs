@@ -83,6 +83,20 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# The Incident clock's replaceable timezone provider, pinned by the owner's
+# approved dependency tranche. tz 0.28.4 bundles tzdata2026d. This configures
+# the existing Incident seam only; no global Calendar database is set, and no
+# UTC-only or fixed-offset fallback is introduced.
+#
+# Automatic updates are disabled by omission: no Tz.UpdatePeriodically or
+# Tz.WatchPeriodically child is started. The bundled data therefore remains
+# pinned until an explicit package update is chosen. Do not set
+# :tz, :iana_version — forcing a version requires a custom :data_dir, while
+# this install uses the package's bundled data.
+config :veritas_core,
+  incident_timezone_database: Tz.TimeZoneDatabase,
+  incident_timezone_rules_version: "2026d"
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

@@ -95,6 +95,8 @@ defmodule Veritas.Web.AdminHomeLabTest do
       # ── a ticket, raised and moved to closed ──
       {:ok, queue, _static} = live(conn, ~p"/incidents")
 
+      queue |> element("#create-ticket") |> render_click()
+
       queue
       |> form("#raise-ticket")
       |> render_submit(%{"title" => "Checkout is down", "description" => "Nobody can pay"})
@@ -120,6 +122,8 @@ defmodule Veritas.Web.AdminHomeLabTest do
       # ── a Change, authorised by the operator who raised it ──
       {:ok, changes, _static} = live(conn, ~p"/changes")
 
+      changes |> element("#create-ticket") |> render_click()
+
       changes
       |> form("#raise-ticket")
       |> render_submit(%{"title" => "Upgrade the database", "description" => "Saturday night"})
@@ -143,6 +147,8 @@ defmodule Veritas.Web.AdminHomeLabTest do
 
       # ── a Vulnerability's risk, accepted ──
       {:ok, vulnerabilities, _static} = live(conn, ~p"/vulnerabilities")
+
+      vulnerabilities |> element("#create-ticket") |> render_click()
 
       vulnerabilities
       |> form("#raise-ticket")
@@ -262,6 +268,8 @@ defmodule Veritas.Web.AdminHomeLabTest do
       # says which rule it is enforcing, so the screen is not a dead end.
       {:ok, changes, _static} = live(conn, ~p"/changes")
 
+      changes |> element("#create-ticket") |> render_click()
+
       changes
       |> form("#raise-ticket")
       |> render_submit(%{"title" => "Upgrade the database", "description" => "Saturday night"})
@@ -288,6 +296,8 @@ defmodule Veritas.Web.AdminHomeLabTest do
         sign_in(chair_conn, workspace, roles: ["CAB Chair"], email: "chair@example.test")
 
       {:ok, changes, _static} = live(chair_conn, ~p"/changes")
+
+      changes |> element("#create-ticket") |> render_click()
 
       changes
       |> form("#raise-ticket")

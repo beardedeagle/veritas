@@ -168,7 +168,7 @@ defmodule Veritas.Store.Memory do
   @impl true
   def delete({:veritas_store_tx, accumulator}, table, record_id) do
     id = normalise_id(record_id)
-    :ok = Tx.buffer_op(accumulator, {:delete, table, id})
+    :ok = Tx.buffer_op(accumulator, {:delete, workspace(accumulator), table, id})
     :ok = Tx.put_overlay(accumulator, table, id, %{"id" => id, "deleted" => true})
     :ok
   end
@@ -206,14 +206,48 @@ defmodule Veritas.Store.Memory do
       "attributes" => attrs
     }
 
-    :ok = Tx.buffer_op(accumulator, {:relate, kind, edge})
+    stored = Map.put(edge, "workspace", workspace(accumulator))
+    :ok = Tx.buffer_op(accumulator, {:relate, kind, stored})
     {:ok, edge}
   end
 
   @impl true
   def unrelate({:veritas_store_tx, accumulator}, kind, from, to) do
-    :ok = Tx.buffer_op(accumulator, {:unrelate, kind, normalise_id(from), normalise_id(to)})
+    :ok =
+      Tx.buffer_op(
+        accumulator,
+        {:unrelate, workspace(accumulator), kind, normalise_id(from), normalise_id(to)}
+      )
+
     :ok
+  end
+
+  @impl true
+  def outgoing_relations({:veritas_store_tx, accumulator} = tx, kind, from) do
+    kind = relation_kind_name(kind)
+    scope = workspace(accumulator)
+
+    if relation_identifier?(scope) and relation_identifier?(kind) and relation_identifier?(from) do
+      with {:ok, kinds} <- relation_kinds(tx),
+           :ok <- require_relation_kind(kinds, kind),
+           {:ok, committed} <- Veritas.Store.Memory.Server.relations(@server, scope) do
+        if is_list(committed) do
+          committed
+          |> relation_overlay(Tx.ops(accumulator), scope)
+          |> select_outgoing_relations(kind, from)
+        else
+          relation_protocol_error()
+        end
+      end
+    else
+      {:error, Error.new(:invalid_request, "relation identifiers must be logical record ids")}
+    end
+  catch
+    :exit, {:timeout, _} ->
+      {:error, Error.new(:timeout, "the in-memory relation read timed out")}
+
+    :exit, _ ->
+      {:error, Error.new(:unavailable, "the in-memory relation read is unavailable")}
   end
 
   @impl true
@@ -440,6 +474,113 @@ defmodule Veritas.Store.Memory do
   # this transaction has deleted is not visible at all.
   defp merge_overlay(rows, accumulator, table) do
     Veritas.Store.Filter.merge(rows, Tx.overlay_rows(accumulator, table))
+  end
+
+  defp relation_kind_name(kind) when is_atom(kind) and kind not in [nil, true, false],
+    do: Atom.to_string(kind)
+
+  defp relation_kind_name(kind) when is_binary(kind), do: kind
+  defp relation_kind_name(_kind), do: nil
+
+  # These rows already carry logical ids. Never strip a physical table prefix:
+  # doing so could reinterpret a wrong-table reference as a valid endpoint.
+  defp relation_identifier?(id) when is_binary(id), do: Regex.match?(~r/\A[A-Za-z0-9_]+\z/, id)
+  defp relation_identifier?(_id), do: false
+
+  defp require_relation_kind(kinds, kind) when is_list(kinds) do
+    valid? =
+      Enum.all?(kinds, fn
+        %{"id" => id} -> relation_identifier?(relation_kind_name(id))
+        _ -> false
+      end)
+
+    cond do
+      not valid? ->
+        relation_protocol_error()
+
+      Enum.any?(kinds, fn row -> relation_kind_name(row["id"]) == kind end) ->
+        :ok
+
+      true ->
+        {:error,
+         Error.new(:invalid_request, "the relation kind is not registered in this Workspace",
+           details: %{reason: :unknown_relation_kind}
+         )}
+    end
+  end
+
+  defp require_relation_kind(_kinds, _kind), do: relation_protocol_error()
+
+  # Prepending avoids copying the full committed list for every buffered add.
+  # Keep support for old operation tuples while scoping new removals explicitly.
+  defp relation_overlay(committed, ops, scope) do
+    Enum.reduce(ops, Enum.reverse(committed), fn
+      {:relate, _kind, %{"workspace" => other}}, edges when other != scope ->
+        edges
+
+      {:relate, _kind, edge}, edges ->
+        [edge | edges]
+
+      {:unrelate, ^scope, kind, from, to}, edges ->
+        without_relation(edges, kind, from, to)
+
+      {:unrelate, kind, from, to}, edges ->
+        without_relation(edges, kind, from, to)
+
+      _other, edges ->
+        edges
+    end)
+    |> Enum.reverse()
+  end
+
+  defp without_relation(edges, kind, from, to) do
+    kind = relation_kind_name(kind)
+
+    Enum.reject(edges, fn
+      %{"kind" => ^kind, "from" => ^from, "to" => ^to} -> true
+      _ -> false
+    end)
+  end
+
+  defp select_outgoing_relations(rows, kind, from) do
+    Enum.reduce_while(rows, {:ok, []}, fn
+      %{"kind" => edge_kind, "from" => source} = row, {:ok, edges} ->
+        cond do
+          not relation_identifier?(edge_kind) or not relation_identifier?(source) ->
+            {:halt, relation_protocol_error()}
+
+          edge_kind != kind or source != from ->
+            {:cont, {:ok, edges}}
+
+          true ->
+            case decode_relation(row) do
+              {:ok, edge} -> {:cont, {:ok, [edge | edges]}}
+              {:error, _} = error -> {:halt, error}
+            end
+        end
+
+      _row, _acc ->
+        {:halt, relation_protocol_error()}
+    end)
+    |> case do
+      {:ok, edges} -> {:ok, %{edges: Enum.reverse(edges)}}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp decode_relation(%{"id" => id, "to" => target, "attributes" => attributes} = row)
+       when is_map(attributes) do
+    if relation_identifier?(id) and relation_identifier?(target) do
+      {:ok, Map.take(row, ["id", "kind", "from", "to", "attributes"])}
+    else
+      relation_protocol_error()
+    end
+  end
+
+  defp decode_relation(_row), do: relation_protocol_error()
+
+  defp relation_protocol_error do
+    {:error, Error.new(:protocol, "the stored relation data is malformed")}
   end
 
   defp normalise_id(id) when is_binary(id) do

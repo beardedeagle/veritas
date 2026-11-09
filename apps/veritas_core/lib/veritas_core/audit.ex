@@ -297,16 +297,36 @@ defmodule Veritas.Core.Audit do
 
       case Store.list(tx, :audit_event, filter) do
         {:ok, rows} ->
-          case first_break(rows, %{hash: nil, sequence: nil}, 0) do
-            nil -> check_anchor(workspace, rows)
-            {index, :tampered} -> {:ok, {:broken_at, index}}
-            {index, :unverifiable} -> {:error, unverifiable_error(rows, index)}
-          end
+          verify_rows(workspace, rows)
 
         {:error, reason} ->
           {:error, reason}
       end
     end)
+  end
+
+  @doc """
+  Verifies normalized Audit Log rows supplied by the Workspace's adapter.
+
+  Args:
+    workspace (Store.workspace()): Workspace whose external anchor is checked.
+    rows ([map()]): Complete audit history in ascending sequence order, using
+      the same normalized values returned by the Store read path.
+
+  Returns:
+    The same intact, broken-at or error verdict as `verify/1`, without reading
+    through the configured Store adapter or rewriting history.
+  """
+  @spec verify_rows(Store.workspace(), [map()]) ::
+          {:ok, :intact}
+          | {:ok, {:broken_at, non_neg_integer()}}
+          | {:error, Error.t()}
+  def verify_rows(workspace, rows) do
+    case first_break(rows, %{hash: nil, sequence: nil}, 0) do
+      nil -> check_anchor(workspace, rows)
+      {index, :tampered} -> {:ok, {:broken_at, index}}
+      {index, :unverifiable} -> {:error, unverifiable_error(rows, index)}
+    end
   end
 
   @doc """

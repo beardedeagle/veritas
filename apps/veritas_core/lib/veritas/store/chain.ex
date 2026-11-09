@@ -23,6 +23,7 @@ defmodule Veritas.Store.Chain do
   """
 
   @registry {__MODULE__, :reconciler}
+  @verifier {__MODULE__, :verifier}
 
   @type row :: map()
   @type assignment :: %{id: String.t(), prev_hash: String.t() | nil, hash: String.t()}
@@ -55,6 +56,42 @@ defmodule Veritas.Store.Chain do
     case reconciler() do
       nil -> {:error, "no host has registered a chain algorithm"}
       fun -> fun.(rows)
+    end
+  end
+
+  @doc """
+  Registers the host's read-only verification, separately from reconciliation.
+
+  Args:
+    fun (function/2): Workspace and complete normalized rows in sequence order.
+
+  Returns:
+    `:ok` after registration. The callback retains the host's verification
+    verdict; registration does not authorize reconciliation or writes.
+  """
+  @spec register_verifier((String.t(), [row()] ->
+          {:ok, :intact} | {:ok, {:broken_at, non_neg_integer()}} | {:error, term()})) :: :ok
+  def register_verifier(fun) when is_function(fun, 2) do
+    :persistent_term.put(@verifier, fun)
+    :ok
+  end
+
+  @doc """
+  Verifies the supplied history through the host, without reconciling it.
+
+  Args:
+    workspace (String.t()): Workspace whose anchor the host must check.
+    rows ([row()]): Complete normalized history in ascending sequence order.
+
+  Returns:
+    The host verdict, or an error when no verifier is registered.
+  """
+  @spec verify(String.t(), [row()]) ::
+          {:ok, :intact} | {:ok, {:broken_at, non_neg_integer()}} | {:error, term()}
+  def verify(workspace, rows) do
+    case :persistent_term.get(@verifier, nil) do
+      nil -> {:error, "no host has registered an audit verifier"}
+      fun -> fun.(workspace, rows)
     end
   end
 

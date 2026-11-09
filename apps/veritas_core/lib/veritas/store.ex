@@ -168,6 +168,19 @@ defmodule Veritas.Store do
   @spec unrelate(tx(), relation_kind(), record_id(), record_id()) :: :ok | {:error, Error.t()}
   def unrelate(tx, kind, from, to), do: adapter().unrelate(tx, kind, from, to)
 
+  @doc "See the optional `outgoing_relations/3` callback."
+  @spec outgoing_relations(tx(), relation_kind() | String.t(), record_id()) ::
+          {:ok, %{edges: [row()]}} | {:error, Error.t()}
+  def outgoing_relations(tx, kind, from) do
+    module = adapter()
+
+    if Code.ensure_loaded?(module) and function_exported?(module, :outgoing_relations, 3) do
+      module.outgoing_relations(tx, kind, from)
+    else
+      {:error, Error.new(:unsupported, "the adapter does not provide outgoing relation reads")}
+    end
+  end
+
   @doc "See `Veritas.Store.traverse/5`."
   @spec traverse(tx(), record_id(), :out | :in | :both, pos_integer(), keyword()) ::
           {:ok, %{nodes: [row()], edges: [row()]}} | {:error, Error.t()}
@@ -293,6 +306,29 @@ defmodule Veritas.Store do
   @doc "Removes a relation between two records."
   @callback unrelate(tx(), kind :: relation_kind(), from :: record_id(), to :: record_id()) ::
               :ok | {:error, Error.t()}
+
+  @doc """
+  Reads every outgoing edge of a registered kind in the transaction's Workspace.
+
+  Returns `{:ok, %{edges: edges}}`, where each edge has the string keys `id`,
+  `kind`, `from`, `to` and `attributes` (a map). Identifiers are logical ids;
+  physical edge identities and attributes are preserved, not deduplicated.
+  Buffered additions and removals are visible. No endpoint is fetched: a
+  missing source or target does not hide an otherwise well-formed edge, and
+  a known kind with no edges returns `{:ok, %{edges: []}}`.
+
+  Invalid identifiers produce a safe `:invalid_request` without echoing input.
+  An unknown Workspace-local kind produces `:invalid_request` with details
+  `%{reason: :unknown_relation_kind}`. Undecodable stored references produce
+  `:protocol`. Reads are complete or return a typed error, never a successful
+  truncated result. Adapters without this optional callback return `:unsupported`.
+  """
+  @callback outgoing_relations(
+              tx(),
+              kind :: relation_kind() | String.t(),
+              from :: record_id()
+            ) :: {:ok, %{edges: [row()]}} | {:error, Error.t()}
+  @optional_callbacks outgoing_relations: 3
 
   @doc """
   Walks relations from a record.

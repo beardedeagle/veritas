@@ -128,6 +128,10 @@ defmodule Mix.Tasks.Veritas.Cli do
           copy: :boolean,
           json: :boolean,
           revision: :integer,
+          domain_revision: :string,
+          policy_revision: :string,
+          policy_version: :string,
+          domain_file: :string,
           next: :string,
           approve: :boolean,
           model: :string,
@@ -183,6 +187,8 @@ defmodule Mix.Tasks.Veritas.Cli do
       ["chain-key", subcommand] -> chain_key(subcommand, opts, json?)
       ["account", subcommand] -> account(subcommand, opts, json?)
       ["workflow", subcommand] -> workflow(subcommand, opts, json?)
+      ["incident", subcommand] -> incident(subcommand, opts, json?)
+      ["incident-policy", subcommand] -> incident_policy(subcommand, opts, json?)
       ["audit", "verify"] -> verify(opts, json?)
       ["migrate"] -> migrate(opts, json?)
       ["doctor"] -> doctor(opts, json?)
@@ -231,9 +237,8 @@ defmodule Mix.Tasks.Veritas.Cli do
 
         "complete" ->
           Veritas.Core.Workflows.complete(workspace, id, input, principal,
-            expected_revision: opts[:revision],
-            next: opts[:next],
-            approve: opts[:approve]
+            incident_opts(opts, json?) ++ [next: opts[:next], approve: opts[:approve],
+              domain_fields: workflow_input(opts[:domain_file], json?)]
           )
 
         "draft" ->
@@ -288,10 +293,8 @@ defmodule Mix.Tasks.Veritas.Cli do
         store_error(reason, json?)
 
       {:error, reason} ->
-        refuse(Error.message(reason), json?, %{
-          command: "workflow #{command}",
-          code: if(is_atom(reason), do: reason, else: :refused)
-        })
+        safe = Error.public(reason)
+        refuse(safe.message, json?, Map.put(safe, :command, command))
     end
   end
 
@@ -321,6 +324,60 @@ defmodule Mix.Tasks.Veritas.Cli do
         do: usage_error("workflow #{command} needs --#{option} with a valid value", json?)
     end)
   end
+
+  defp incident(command, opts, json?) when command in ~w(show update) do
+    principal = operator_principal(workspace(opts), opts[:as], json?)
+    id = opts[:id] || usage_error("incident needs --id", json?)
+    result = case command do
+      "show" -> Tickets.read_domain(workspace(opts), id, principal)
+      "update" ->
+        unless opts[:file], do: usage_error("incident update needs --file", json?)
+        Tickets.update_domain(workspace(opts), id, workflow_input(opts[:file], json?),
+          principal, incident_opts(opts, json?))
+    end
+    workflow_result(result, "incident #{command}", json?)
+  end
+  defp incident(_, _, json?), do: usage_error("incident expects show or update", json?)
+
+  defp incident_policy(command, opts, json?) when command in ~w(show validate save publish) do
+    principal = operator_principal(workspace(opts), opts[:as], json?)
+    if command in ~w(validate save) and is_nil(opts[:file]),
+      do: usage_error("incident-policy #{command} needs --file", json?)
+    if command in ~w(save publish) and not Keyword.has_key?(opts, :policy_revision),
+      do: usage_error("Use --policy-revision N, or null for no configuration row", json?)
+    result = case command do
+      "show" -> Tickets.incident_policy(workspace(opts), principal)
+      "validate" -> Tickets.validate_incident_policy(workspace(opts), workflow_input(opts[:file], json?), principal)
+      "save" -> Tickets.save_incident_policy(workspace(opts), workflow_input(opts[:file], json?),
+        principal, nullable_revision(opts[:policy_revision], json?))
+      "publish" -> Tickets.publish_incident_policy(workspace(opts), principal,
+        nullable_revision(opts[:policy_revision], json?), incident_opts(opts, json?) ++ [approve: opts[:approve] == true])
+    end
+    workflow_result(result, "incident-policy #{command}", json?)
+  end
+  defp incident_policy(_, _, json?),
+    do: usage_error("incident-policy expects show, validate, save or publish", json?)
+
+  # Presence is preserved: an omitted option never becomes an explicit nil CAS.
+  defp incident_opts(opts, json?) do
+    base = Keyword.take(opts, [:reason])
+    base = if Keyword.has_key?(opts, :revision),
+      do: Keyword.put(base, :expected_revision, opts[:revision]), else: base
+    base = if Keyword.has_key?(opts, :domain_revision),
+      do: Keyword.put(base, :expected_domain_revision, nullable_revision(opts[:domain_revision], json?)), else: base
+    if Keyword.has_key?(opts, :policy_version),
+      do: Keyword.put(base, :expected_policy_version, if(opts[:policy_version] == "null", do: nil, else: opts[:policy_version])),
+      else: base
+  end
+
+  defp nullable_revision("null", _json?), do: nil
+  defp nullable_revision(value, json?) when is_binary(value) do
+    case Integer.parse(value) do
+      {revision, ""} when revision > 0 -> revision
+      _ -> usage_error("Revision must be a positive integer or null", json?)
+    end
+  end
+  defp nullable_revision(_, json?), do: usage_error("Revision must be a positive integer or null", json?)
 
   # ── commands ──────────────────────────────────────────────────────────────
 
@@ -375,15 +432,19 @@ defmodule Mix.Tasks.Veritas.Cli do
   end
 
   defp open(opts, json?) do
-    attrs = %{
-      "title" => opts[:title] || "(untitled)",
-      "requester" => opts[:requester] || "local",
-      "priority" => opts[:priority] || "medium"
-    }
+    type = opts[:type] || "incident"
+    principal = operator_principal(workspace(opts), opts[:as], json?)
+    attrs = %{"title" => opts[:title] || "(untitled)",
+      "description" => opts[:description] || "", "requester" => opts[:requester] || principal.id,
+      "domain_fields" => workflow_input(opts[:domain_file], json?)}
+    attrs = cond do
+      Keyword.has_key?(opts, :priority) -> Map.put(attrs, "priority", opts[:priority])
+      type != "incident" -> Map.put(attrs, "priority", "medium")
+      true -> attrs
+    end
 
-    actor = %{type: "user", id: attrs["requester"]}
-
-    case Tickets.open(workspace(opts), opts[:type] || "incident", attrs, actor) do
+    case Tickets.open(workspace(opts), type, attrs, principal, Principal.audit_actor(principal),
+           incident_opts(opts, json?)) do
       {:ok, row} ->
         if json? do
           emit_json(%{ticket: row})
@@ -394,8 +455,7 @@ defmodule Mix.Tasks.Veritas.Cli do
         exit({:shutdown, @exit_ok})
 
       {:error, reason} ->
-        {message, code} = refusal(reason)
-        refuse(message, json?, %{code: code})
+        public_failure(reason, json?)
     end
   end
 
@@ -403,7 +463,9 @@ defmodule Mix.Tasks.Veritas.Cli do
     if opts[:actor], do: usage_error("transition uses --as, not --actor", json?)
     principal = operator_principal(workspace(opts), opts[:as], json?)
 
-    case Tickets.transition(workspace(opts), opts[:id] || "", opts[:to_state] || "", principal) do
+    case Tickets.transition(workspace(opts), opts[:id] || "", opts[:to_state] || "", principal,
+           Principal.audit_actor(principal), incident_opts(opts, json?) ++
+             [domain_fields: workflow_input(opts[:domain_file], json?)]) do
       {:ok, row} ->
         if json? do
           emit_json(%{ticket: row})
@@ -414,21 +476,21 @@ defmodule Mix.Tasks.Veritas.Cli do
         exit({:shutdown, @exit_ok})
 
       {:error, reason} when is_binary(reason) ->
-        refuse(reason, json?, %{code: :not_authorised})
+        public_failure(reason, json?)
 
       {:error, %Error{} = reason} ->
         store_error(reason, json?)
 
       {:error, reason} ->
-        {message, code} = refusal(reason)
-        refuse(message, json?, %{code: code})
+        public_failure(reason, json?)
     end
   end
 
   defp update(opts, json?) do
-    actor = %{type: "user", id: opts[:actor] || "local"}
+    principal = operator_principal(workspace(opts), opts[:as], json?)
 
-    case Tickets.update(workspace(opts), opts[:id] || "", update_attrs(opts), actor) do
+    case Tickets.update(workspace(opts), opts[:id] || "", update_attrs(opts), principal,
+           Principal.audit_actor(principal), incident_opts(opts, json?)) do
       {:ok, row} ->
         if json? do
           emit_json(%{ticket: row})
@@ -442,8 +504,7 @@ defmodule Mix.Tasks.Veritas.Cli do
         store_error(reason, json?)
 
       {:error, reason} ->
-        {message, code} = update_refusal(reason)
-        refuse(message, json?, %{id: opts[:id], code: code})
+        public_failure(reason, json?)
     end
   end
 
@@ -463,21 +524,6 @@ defmodule Mix.Tasks.Veritas.Cli do
     |> put_opt(:to_state, opts[:to_state])
     |> Map.new()
   end
-
-  # The domain's answer to an update it refused, as a message and a code.
-  #
-  # The rule about which fields an update owns belongs to the domain, so the
-  # CLI reports the field it was told about rather than deciding for itself.
-  # The **words** are the shared vocabulary's, so that the CLI, the GraphQL
-  # schema and a screen read the same refusal; the code is the CLI's own, so
-  # that a script can tell one refusal from another without reading them.
-  defp update_refusal(:not_found), do: {Error.message(:not_found), :not_found}
-  defp update_refusal(:no_change), do: {Error.message(:no_change), :no_change}
-
-  defp update_refusal({:not_updatable, field}),
-    do: {Error.message({:not_updatable, field}), :not_updatable}
-
-  defp update_refusal(reason), do: refusal(reason)
 
   defp impact(opts, json?) do
     # The CMDB's question, asked of the CMDB's domain: the CLI must not answer
@@ -1513,18 +1559,19 @@ defmodule Mix.Tasks.Veritas.Cli do
     exit({:shutdown, @exit_refused})
   end
 
-  # A refusal reason, as a message and a code — never as an inspected struct.
-  defp refusal(reason) do
-    {Error.message(reason) || "the domain refused the operation", error_code(reason)}
+  defp public_failure(%Error{} = reason, json?), do: store_error(reason, json?)
+  defp public_failure(reason, json?) do
+    safe = Error.public(reason)
+    refuse(safe.message, json?, Map.delete(safe, :message))
   end
 
   defp store_error(reason, json?) do
-    message = Error.message(reason) || "the datastore failed"
+    safe = Error.public(reason)
 
     if json? do
-      emit_json(%{error: %{code: error_code(reason), message: message}})
+      emit_json(%{error: safe})
     else
-      Mix.shell().error("store error: #{message}")
+      Mix.shell().error("store error: #{safe.message}")
     end
 
     exit({:shutdown, @exit_store})
@@ -1560,6 +1607,13 @@ defmodule Mix.Tasks.Veritas.Cli do
       ci ...       list | show | create | relate | seed
       account ...  bootstrap-token | create | set-password
       workflow ... template | list | show | save | publish | start | run | complete | draft | generate
+      incident show --workspace W --id ID --as EMAIL
+      incident update --id ID --file FACTS.json --domain-revision N|null [--revision RUN]
+      incident-policy show|validate|save|publish --workspace W --as EMAIL
+        validate/save: --file POLICY.json; save/publish: --policy-revision N|null
+        publish: --approve; optional --policy-version ID|null checks active version
+      Incident mutations: --domain-file FACTS.json --domain-revision N|null
+        --revision is workflow-only; omitted preconditions are not explicit null.
       audit verify --workspace W
       migrate
       doctor       [--workspace W]

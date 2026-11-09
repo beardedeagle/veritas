@@ -44,6 +44,9 @@ defmodule Veritas.MixProject do
       # Argon2id, the hash the corpus fixes for local passwords
       # (`docs/09` §3). Apache-2.0, no commercial tier.
       {:argon2_elixir, "~> 4.1"},
+      # The approved replaceable IANA provider, pinned exactly. tz 0.28.4
+      # bundles tzdata2026d.
+      {:tz, "== 0.28.4"},
       {:finch, "~> 0.19"},
       {:jason, "~> 1.4"},
       {:dns_cluster, "~> 0.2.0"},

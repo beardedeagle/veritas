@@ -149,14 +149,14 @@ defmodule Veritas.Web.Shell.HomeLive do
               <.severity_badge priority={incident["priority"]} />
 
               <a
-                href={~p"/incidents/#{incident["id"]}?workspace=#{@workspace}"}
+                href={~p"/#{Tickets.reference(incident)}"}
                 class="min-w-0 flex-1 truncate text-[13px] hover:underline"
               >
                 {incident["title"]}
               </a>
 
               <span class="hidden font-mono text-[11px] text-base-content/40 md:inline">
-                {incident["id"]}
+                {Tickets.reference(incident)}
               </span>
 
               <.state_pill state={incident["state"]} />
